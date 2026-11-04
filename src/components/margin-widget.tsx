@@ -4,9 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
-  MAX_THOUGHT,
   archiveSitting,
-  closeSitting,
   createSitting,
   formatElapsed,
   formatLength,
@@ -14,7 +12,7 @@ import {
   parkThought,
   reveal,
   resume,
-  screenFor,
+  seal,
   sittingLength,
   transcript,
   type Sitting,
@@ -29,18 +27,26 @@ const LENGTHS: { label: string; minutes: number | null }[] = [
   { label: "Open", minutes: null },
 ]
 
+type Phase = "loading" | "idle" | "live" | "sealed" | "open"
+
+function phaseOf(store: Store | null, viewing: Sitting | null): Phase {
+  if (!store) return "loading"
+  if (viewing) return "open"
+  if (!store.active) return "idle"
+  if (store.active.revealedAt) return "open"
+  if (store.active.endedAt) return "sealed"
+  return "live"
+}
+
 function themeColor(theme: Theme) {
-  return theme === "ink" ? "#171717" : "#e6e6e6"
+  return theme === "ink" ? "#141414" : "#e8e8e6"
 }
 
 function applyTheme(theme: Theme) {
   document.documentElement.classList.toggle("dark", theme === "ink")
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", themeColor(theme))
-}
-
-function heldLabel(count: number) {
-  if (count === 0) return "Nothing held yet"
-  return `${count} held`
+  const color = themeColor(theme)
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", color)
+  window.margin?.setBackground(color)
 }
 
 export function MarginWidget() {
@@ -58,31 +64,23 @@ export function MarginWidget() {
   const storeRef = useRef<Store | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const revealRef = useRef<HTMLButtonElement>(null)
-  const composingRef = useRef(false)
-  const parkLock = useRef(false)
-  const shiftHeld = useRef(false)
 
   storeRef.current = store
-  const screen = store ? screenFor(store, viewing?.id ?? null) : "loading"
-  const active = store?.active ?? null
-  const archiveHit =
-    viewing && store?.archive.some((item) => item.id === viewing.id) ? viewing : null
-  const openSitting = active?.revealedAt ? active : archiveHit
+  const phase = phaseOf(store, viewing)
+  const openSitting = viewing ?? (store?.active?.revealedAt ? store.active : null)
 
   useEffect(() => {
     const loaded = loadStore()
-    storeRef.current = loaded.store
-    draftRef.current = loaded.store.active?.draft ?? ""
     setStore(loaded.store)
     setPersistent(loaded.persistent)
+    draftRef.current = loaded.store.active?.draft ?? ""
     setDraft(loaded.store.active?.draft ?? "")
     applyTheme(loaded.store.theme)
   }, [])
 
   useEffect(() => {
-    if (screen !== "live") return
+    if (phase !== "live") return
     const tick = () => setNow(Date.now())
-    tick()
     const id = window.setInterval(tick, 1000)
     const onVisible = () => {
       if (document.visibilityState === "visible") tick()
@@ -92,44 +90,30 @@ export function MarginWidget() {
       window.clearInterval(id)
       document.removeEventListener("visibilitychange", onVisible)
     }
-  }, [screen])
+  }, [phase])
 
   useEffect(() => {
-    if (screen === "live") inputRef.current?.focus()
-    if (screen === "sealed") revealRef.current?.focus()
-  }, [screen, active?.id])
+    if (phase === "live") inputRef.current?.focus()
+    if (phase === "sealed") revealRef.current?.focus()
+  }, [phase])
 
   useEffect(() => {
+    if (!store) return
     const id = window.setTimeout(() => {
       const current = storeRef.current
-      if (!current?.active || current.active.endedAt || current.active.revealedAt) return
-      if (current.active.draft === draftRef.current) return
-      const next = { ...current, active: { ...current.active, draft: draftRef.current } }
+      if (!current?.active || current.active.endedAt) return
+      if (current.active.draft === draft) return
+      const next = { ...current, active: { ...current.active, draft } }
       storeRef.current = next
       setStore(next)
       setPersistent(saveStore(next))
     }, 250)
     return () => window.clearTimeout(id)
-  }, [draft])
-
-  useEffect(() => {
-    const flush = () => {
-      const current = storeRef.current
-      if (!current) return
-      let next = current
-      if (current.active && !current.active.endedAt && !current.active.revealedAt && current.active.draft !== draftRef.current) {
-        next = { ...current, active: { ...current.active, draft: draftRef.current } }
-        storeRef.current = next
-      }
-      if (!saveStore(next)) setPersistent(false)
-    }
-    window.addEventListener("pagehide", flush)
-    return () => window.removeEventListener("pagehide", flush)
-  }, [])
+  }, [draft, store])
 
   useEffect(() => {
     if (!justHeld) return
-    const id = window.setTimeout(() => setJustHeld(false), 1200)
+    const id = window.setTimeout(() => setJustHeld(false), 900)
     return () => window.clearTimeout(id)
   }, [justHeld])
 
@@ -147,7 +131,7 @@ export function MarginWidget() {
   }
 
   function begin() {
-    if (!store || store.active) return
+    if (!store) return
     setViewing(null)
     setNotice(null)
     setConfirmClear(false)
@@ -158,10 +142,10 @@ export function MarginWidget() {
 
   function parkCurrent() {
     const current = storeRef.current
-    if (!current?.active || current.active.endedAt || current.active.revealedAt) return
+    if (!current?.active || current.active.endedAt) return
     const result = parkThought(current.active, draftRef.current, Date.now())
     if (!result.ok) {
-      if (result.reason === "long") setNotice("Shorten it to 4,000 characters.")
+      if (result.reason === "long") setNotice("Too long to hold. Shorten it a little.")
       return
     }
     draftRef.current = ""
@@ -171,49 +155,42 @@ export function MarginWidget() {
     persist({ ...current, active: result.sitting })
   }
 
-  function tryPark() {
-    if (composingRef.current || parkLock.current) return
-    parkLock.current = true
-    parkCurrent()
-    window.requestAnimationFrame(() => {
-      parkLock.current = false
-    })
-  }
-
   function endSitting() {
     const current = storeRef.current
-    if (!current?.active || current.active.endedAt || current.active.revealedAt) return
-    const result = closeSitting({ ...current.active, draft: draftRef.current }, Date.now())
-    if (!result.ok) {
-      setNotice("Shorten it before you end the sitting.")
-      inputRef.current?.focus()
-      return
+    if (!current?.active || current.active.endedAt) return
+    let active = current.active
+    const pending = draftRef.current.trim()
+    if (pending) {
+      const result = parkThought(active, pending, Date.now())
+      if (!result.ok && result.reason === "long") {
+        setNotice("That line is too long to hold. Shorten it, or clear it, then end.")
+        return
+      }
+      if (result.ok) active = result.sitting
     }
     draftRef.current = ""
     setDraft("")
     setNotice(null)
-    setJustHeld(false)
-    persist({ ...current, active: result.sitting })
+    persist({ ...current, active: seal(active, Date.now()) })
   }
 
   function onReveal() {
     const current = storeRef.current
-    if (!current?.active || current.active.endedAt == null) return
+    if (!current?.active) return
     setNotice(null)
     persist({ ...current, active: reveal(current.active, Date.now()) })
   }
 
   function onResume() {
     const current = storeRef.current
-    if (!current?.active || current.active.endedAt == null) return
+    if (!current?.active) return
     setNotice(null)
-    setViewing(null)
-    persist({ ...current, active: resume(current.active, Date.now()) })
+    persist({ ...current, active: resume(current.active) })
   }
 
   function finish() {
     const current = storeRef.current
-    if (!current?.active?.revealedAt) return
+    if (!current?.active) return
     setViewing(null)
     setConfirmClear(false)
     setCopied(false)
@@ -224,13 +201,13 @@ export function MarginWidget() {
   function discard() {
     const current = storeRef.current
     if (!current) return
-    if (archiveHit && !current.active?.revealedAt) {
+    if (viewing) {
       persist({
         ...current,
-        archive: current.archive.filter((item) => item.id !== archiveHit.id),
+        archive: current.archive.filter((item) => item.id !== viewing.id),
       })
       setViewing(null)
-    } else if (current.active?.revealedAt) {
+    } else if (current.active) {
       persist({ ...current, active: null })
     }
     setConfirmClear(false)
@@ -239,59 +216,68 @@ export function MarginWidget() {
   }
 
   async function copyAll(sitting: Sitting) {
-    const text = transcript(sitting)
     try {
-      if (!navigator.clipboard?.writeText) throw new Error("unavailable")
-      await navigator.clipboard.writeText(text)
+      await navigator.clipboard.writeText(transcript(sitting))
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch {
-      setNotice("Could not copy. Select the thoughts instead.")
+      setNotice("Couldn’t copy. Select the thoughts instead.")
     }
   }
 
+  const active = store?.active ?? null
   const elapsed = active ? sittingLength(active, now) : 0
   const targetMs = active?.targetMinutes ? active.targetMinutes * 60_000 : null
-  const blockDone = screen === "live" && targetMs !== null && elapsed >= targetMs
+  const blockDone = phase === "live" && targetMs !== null && elapsed >= targetMs
   const progress = targetMs ? Math.min(100, (elapsed / targetMs) * 100) : 0
-  const tooLong = draft.trim().length > MAX_THOUGHT
 
   return (
-    <main className="desk flex min-h-dvh flex-col items-center px-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+    <main className="desk flex min-h-dvh items-start justify-center px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-10 sm:items-center">
       <section
-        className="margin-widget w-[min(100%,24rem)] px-5 py-5 sm:px-6 sm:py-6 md:my-auto"
-        aria-label="Margin"
-        aria-busy={screen === "loading"}
-        data-phase={screen}
+        className="margin-widget w-[min(100%,24rem)] px-5 py-5 sm:px-6 sm:py-6"
+        aria-labelledby="margin-title"
+        aria-busy={phase === "loading"}
+        data-phase={phase}
       >
-        <header className="mb-6 flex items-center justify-between gap-3">
-          <h1 id="margin-title" className="text-base font-medium tracking-tight">
-            Margin
+        <header className="drag mb-6 flex items-center justify-between gap-3">
+          <h1 id="margin-title" className="text-[13px] font-medium tracking-[0.22em]">
+            MARGIN
           </h1>
-          {store ? (
+          <div className="flex items-center">
+            {store ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                onClick={switchTheme}
+                aria-label={store.theme === "ink" ? "Switch to paper" : "Switch to ink"}
+              >
+                {store.theme === "ink" ? "Paper" : "Ink"}
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              className="text-muted-foreground"
-              onClick={switchTheme}
-              aria-label={store.theme === "ink" ? "Switch to paper" : "Switch to ink"}
+              className="desktop-only text-muted-foreground"
+              onClick={() => window.margin?.close()}
             >
-              {store.theme === "ink" ? "Paper" : "Ink"}
+              Close
             </Button>
-          ) : (
-            <div className="h-7 w-14 rounded-md bg-muted" />
-          )}
+          </div>
         </header>
 
-        {screen === "loading" ? <Loading /> : null}
+        {phase === "loading" ? <Loading /> : null}
 
-        {screen === "idle" && store ? (
+        {phase === "idle" && store ? (
           <div className="space-y-6">
             <div className="space-y-2">
-              <p className="text-[1.35rem] font-medium leading-snug">Park what interrupts you.</p>
+              <p className="text-[1.45rem] font-medium leading-snug">
+                Park what interrupts you.
+              </p>
               <p className="text-sm leading-relaxed text-muted-foreground">
-                It stays closed until you end the sitting.
+                Thoughts stay closed until you end the sitting and ask to see them.
               </p>
             </div>
             <div className="grid grid-cols-3 gap-1 rounded-2xl bg-muted p-1" role="group" aria-label="Sitting length">
@@ -316,44 +302,37 @@ export function MarginWidget() {
             </Button>
             {store.archive.length > 0 ? (
               <div>
-                <p className="mb-1 text-[11px] tracking-[0.16em] text-muted-foreground uppercase">Earlier</p>
+                <p className="mb-1 text-[11px] tracking-[0.16em] text-muted-foreground uppercase">
+                  Earlier
+                </p>
                 <ul className="max-h-48 overflow-y-auto">
-                  {store.archive.map((sitting) => {
-                    const when = formatWhen(sitting.startedAt)
-                    const length = formatLength(sittingLength(sitting, sitting.endedAt ?? sitting.startedAt))
-                    const count = sitting.thoughts.length
-                    return (
-                      <li key={sitting.id} className="border-b border-border last:border-b-0">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="h-auto w-full justify-between gap-3 rounded-none px-0 py-2.5 font-normal whitespace-normal"
-                          aria-label={`${when}, ${length}, ${count} ${count === 1 ? "thought" : "thoughts"}`}
-                          onClick={() => {
-                            if (store.active) return
-                            setNotice(null)
-                            setConfirmClear(false)
-                            setCopied(false)
-                            setViewing(sitting)
-                          }}
-                        >
-                          <span>{when}</span>
-                          <span className="text-muted-foreground tabular-nums">
-                            {length}
-                            {" · "}
-                            {count}
-                          </span>
-                        </Button>
-                      </li>
-                    )
-                  })}
+                  {store.archive.map((sitting) => (
+                    <li key={sitting.id} className="border-b border-border last:border-b-0">
+                      <button
+                        type="button"
+                        className="flex w-full items-baseline justify-between gap-3 py-2.5 text-left text-sm"
+                        onClick={() => {
+                          setNotice(null)
+                          setConfirmClear(false)
+                          setViewing(sitting)
+                        }}
+                      >
+                        <span>{formatWhen(sitting.startedAt)}</span>
+                        <span className="text-muted-foreground tabular-nums">
+                          {formatLength(sittingLength(sitting, sitting.endedAt ?? sitting.startedAt))}
+                          {" · "}
+                          {sitting.thoughts.length}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
                 </ul>
               </div>
             ) : null}
           </div>
         ) : null}
 
-        {screen === "live" && active ? (
+        {phase === "live" && active ? (
           <div>
             <div className="mb-5 flex items-end justify-between gap-3">
               <div>
@@ -361,94 +340,59 @@ export function MarginWidget() {
                   <span className="breathe inline-block size-1.5 rounded-full bg-foreground" aria-hidden />
                   {blockDone ? "Block finished" : "Studying"}
                 </p>
-                <p className="mt-1 text-3xl font-medium tabular-nums tracking-tight">{formatElapsed(elapsed)}</p>
+                <p className="mt-1 text-3xl font-medium tabular-nums tracking-[0.08em]">
+                  {formatElapsed(elapsed)}
+                </p>
               </div>
-              <p className="pb-1 text-sm text-muted-foreground tabular-nums">
+              <p className="pb-1 text-sm text-muted-foreground">
                 {active.targetMinutes ? `${active.targetMinutes} min` : "Open"}
               </p>
             </div>
             {targetMs ? (
-              <div
-                className="relative mb-5 h-px w-full bg-border"
-                role="progressbar"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={Math.round(progress)}
-                aria-label="Block"
-              >
-                <div className="absolute inset-y-0 left-0 bg-foreground/80" style={{ width: `${progress}%` }} />
+              <div className="mb-5 h-px w-full bg-border" aria-hidden>
+                <div className="h-px bg-foreground/80" style={{ width: `${progress}%` }} />
               </div>
             ) : null}
             {blockDone ? (
-              <p className="mb-4 text-sm text-muted-foreground" role="status">
-                The block is finished. You can keep writing.
-              </p>
+              <p className="mb-4 text-sm text-muted-foreground">The block is finished. Stay, or end it.</p>
             ) : null}
             <Textarea
               ref={inputRef}
               value={draft}
               onChange={(event) => {
-                const value = event.target.value.length > 8000 ? event.target.value.slice(0, 8000) : event.target.value
-                draftRef.current = value
-                setDraft(value)
+                draftRef.current = event.target.value
+                setDraft(event.target.value)
                 if (notice) setNotice(null)
               }}
-              onCompositionStart={() => {
-                composingRef.current = true
-              }}
-              onCompositionEnd={() => {
-                window.setTimeout(() => {
-                  composingRef.current = false
-                }, 0)
-              }}
               onKeyDown={(event) => {
-                shiftHeld.current = event.shiftKey
-                if (event.nativeEvent.isComposing || composingRef.current) return
-                if (event.key !== "Enter" || event.shiftKey) return
+                if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return
                 event.preventDefault()
-                if (event.repeat || parkLock.current) return
-                tryPark()
+                parkCurrent()
               }}
-              onKeyUp={(event) => {
-                if (event.key === "Shift") shiftHeld.current = false
-              }}
-              onBeforeInput={(event) => {
-                const native = event.nativeEvent
-                if (!(native instanceof InputEvent) || native.isComposing || composingRef.current) return
-                const lineBreak = native.inputType === "insertLineBreak" || native.inputType === "insertParagraph"
-                if (!lineBreak || shiftHeld.current) return
-                event.preventDefault()
-                if (parkLock.current) return
-                tryPark()
-              }}
-              placeholder="A stray thought"
+              placeholder="A thought, then return"
               aria-label="Thought to park"
-              aria-describedby="margin-park-help"
-              aria-invalid={tooLong || undefined}
               rows={3}
+              maxLength={4200}
               autoComplete="off"
               spellCheck
-              autoFocus
-              className="min-h-24 resize-none border-border bg-background/60 px-3 py-3 font-serif text-base leading-relaxed md:text-base"
+              className="min-h-24 resize-none border-border bg-background/60 px-3 py-3 text-base leading-relaxed tracking-[0.01em] md:text-base"
             />
-            <p id="margin-park-help" className="mt-2 text-xs text-muted-foreground">
-              Return to park it. It stays hidden.
-            </p>
-            {notice ? (
-              <p className="mt-3 text-sm text-muted-foreground" role="status">
-                {notice}
-              </p>
-            ) : tooLong ? (
-              <p className="mt-3 text-sm text-muted-foreground" role="status">
-                Shorten it to 4,000 characters.
-              </p>
-            ) : null}
+            <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+              <p>Return parks it. It stays hidden.</p>
+              {draft.length > 3600 ? <p className="tabular-nums">{4000 - draft.trim().length}</p> : null}
+            </div>
+            {notice ? <p className="mt-3 text-sm">{notice}</p> : null}
             <div className="mt-5 flex items-center justify-between gap-3">
               <p className="text-sm tabular-nums" aria-live="polite">
-                <span className={active.thoughts.length === 0 ? "text-muted-foreground" : undefined}>
-                  {heldLabel(active.thoughts.length)}
-                </span>
-                {justHeld ? <span className="text-muted-foreground"> Held</span> : null}
+                {justHeld ? (
+                  <span>Held</span>
+                ) : active.thoughts.length === 0 ? (
+                  <span className="text-muted-foreground">Nothing held yet</span>
+                ) : (
+                  <span>
+                    {active.thoughts.length} held
+                  </span>
+                )}
               </p>
               <Button type="button" variant="outline" className="h-10 px-4" onClick={endSitting}>
                 End sitting
@@ -457,18 +401,19 @@ export function MarginWidget() {
           </div>
         ) : null}
 
-        {screen === "sealed" && active ? (
+        {phase === "sealed" && active ? (
           <div>
             <p className="text-sm text-muted-foreground">Sitting closed</p>
-            <p className="mt-2 text-3xl font-medium tabular-nums tracking-tight">
-              {formatElapsed(sittingLength(active, active.endedAt ?? now))}
-            </p>
-            <p className="mt-4 text-xl font-medium leading-snug">
-              {active.thoughts.length === 0 ? "Nothing was held." : `${active.thoughts.length} still put away.`}
+            <p className="mt-2 text-3xl font-medium tabular-nums tracking-[0.08em]">{formatElapsed(elapsed)}</p>
+            <p className="mt-4 text-xl font-medium leading-snug tracking-[0.04em]">
+              {active.thoughts.length === 0
+                ? "Nothing was held."
+                : `${active.thoughts.length} still put away.`}
             </p>
             <p className="mt-2 text-sm text-muted-foreground">They stay closed until you reveal them.</p>
+            {notice ? <p className="mt-3 text-sm">{notice}</p> : null}
             <div className="mt-6 flex flex-col gap-2">
-              <Button type="button" className="h-11" ref={revealRef} autoFocus onClick={onReveal}>
+              <Button type="button" className="h-11" ref={revealRef} onClick={onReveal}>
                 Reveal
               </Button>
               <Button type="button" variant="ghost" onClick={onResume}>
@@ -478,22 +423,22 @@ export function MarginWidget() {
           </div>
         ) : null}
 
-        {screen === "open" && openSitting ? (
+        {phase === "open" && openSitting ? (
           <Reveal
             sitting={openSitting}
-            fromArchive={!active?.revealedAt}
+            fromArchive={viewing !== null}
             copied={copied}
             confirmClear={confirmClear}
             notice={notice}
-            onCopy={() => void copyAll(openSitting)}
-            onDone={!active?.revealedAt ? () => setViewing(null) : finish}
+            onCopy={() => copyAll(openSitting)}
+            onDone={viewing ? () => setViewing(null) : finish}
             onAskClear={() => setConfirmClear(true)}
             onCancelClear={() => setConfirmClear(false)}
             onDiscard={discard}
           />
         ) : null}
 
-        {!persistent && screen !== "loading" ? (
+        {!persistent && phase !== "loading" ? (
           <p className="mt-5 text-xs text-muted-foreground">This sitting stays in this tab only.</p>
         ) : null}
       </section>
@@ -503,11 +448,10 @@ export function MarginWidget() {
 
 function Loading() {
   return (
-    <div className="space-y-3">
-      <div className="h-7 w-40 rounded-md bg-muted" aria-hidden />
-      <div className="h-4 w-full rounded-md bg-muted" aria-hidden />
-      <div className="h-11 w-full rounded-xl bg-muted" aria-hidden />
-      <p className="sr-only">Loading</p>
+    <div className="space-y-3" aria-hidden>
+      <div className="h-7 w-40 rounded-md bg-muted" />
+      <div className="h-4 w-full rounded-md bg-muted" />
+      <div className="h-11 w-full rounded-xl bg-muted" />
     </div>
   )
 }
@@ -540,41 +484,41 @@ function Reveal({
     <div>
       <div className="mb-5 flex items-end justify-between gap-3">
         <div>
-          <p className="text-sm text-muted-foreground">{fromArchive ? formatWhen(sitting.startedAt) : "After"}</p>
-          <p className="mt-1 text-[1.65rem] font-medium leading-none tabular-nums">{length}</p>
+          <p className="text-sm text-muted-foreground">After</p>
+          <p className="mt-1 text-[1.65rem] font-medium leading-none tracking-[0.04em]">{length}</p>
         </div>
         <p className="pb-1 text-sm text-muted-foreground tabular-nums">
-          {sitting.thoughts.length === 1 ? "1 thought" : `${sitting.thoughts.length} thoughts`}
+          {formatWhen(sitting.startedAt)}
+          {" · "}
+          {sitting.thoughts.length}
         </p>
       </div>
       {sitting.thoughts.length === 0 ? (
-        <p className="font-serif text-xl leading-snug">Nothing wandered in.</p>
+        <p className="text-xl font-medium tracking-[0.04em]">Nothing wandered in.</p>
       ) : (
         <ul className="max-h-[min(52vh,28rem)] space-y-5 overflow-y-auto pr-1">
           {sitting.thoughts.map((thought, index) => (
             <li
               key={thought.id}
               className="thought-row"
-              style={{ animationDelay: `${Math.min(index, 12) * 45}ms` }}
+              style={{ animationDelay: `${Math.min(index, 12) * 40}ms` }}
             >
-              <p className="text-xs text-muted-foreground tabular-nums">{formatElapsed(thought.offsetMs)}</p>
-              <p className="mt-1 font-serif text-base leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+              <p className="text-xs tracking-[0.14em] text-muted-foreground tabular-nums">
+                {formatElapsed(thought.offsetMs)}
+              </p>
+              <p className="mt-1 text-[15px] leading-relaxed tracking-[0.01em] whitespace-pre-wrap">
                 {thought.text}
               </p>
             </li>
           ))}
         </ul>
       )}
-      {notice ? (
-        <p className="mt-4 text-sm text-muted-foreground" role="status">
-          {notice}
-        </p>
-      ) : null}
+      {notice ? <p className="mt-4 text-sm">{notice}</p> : null}
       {confirmClear ? (
         <div className="mt-6">
           <p className="text-sm">Discard this sitting?</p>
           <div className="mt-3 flex gap-2">
-            <Button type="button" variant="outline" className="h-10 flex-1" autoFocus onClick={onCancelClear}>
+            <Button type="button" variant="outline" className="h-10 flex-1" onClick={onCancelClear}>
               Keep
             </Button>
             <Button type="button" className="h-10 flex-1" onClick={onDiscard}>
