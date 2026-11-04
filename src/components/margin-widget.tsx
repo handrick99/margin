@@ -38,11 +38,15 @@ function phaseOf(store: Store | null, viewing: Sitting | null): Phase {
   return "live"
 }
 
+function themeColor(theme: Theme) {
+  return theme === "ink" ? "#141414" : "#e8e8e6"
+}
+
 function applyTheme(theme: Theme) {
   document.documentElement.classList.toggle("dark", theme === "ink")
-  const color = theme === "ink" ? "#272727" : "#ececec"
-  const meta = document.querySelector('meta[name="theme-color"]')
-  if (meta) meta.setAttribute("content", color)
+  const color = themeColor(theme)
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", color)
+  window.margin?.setBackground(color)
 }
 
 export function MarginWidget() {
@@ -235,22 +239,33 @@ export function MarginWidget() {
         aria-busy={phase === "loading"}
         data-phase={phase}
       >
-        <header className="mb-6 flex items-center justify-between gap-3">
+        <header className="drag mb-6 flex items-center justify-between gap-3">
           <h1 id="margin-title" className="text-[13px] font-medium tracking-[0.22em]">
             MARGIN
           </h1>
-          {store ? (
+          <div className="flex items-center">
+            {store ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                onClick={switchTheme}
+                aria-label={store.theme === "ink" ? "Switch to paper" : "Switch to ink"}
+              >
+                {store.theme === "ink" ? "Paper" : "Ink"}
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              className="text-muted-foreground"
-              onClick={switchTheme}
-              aria-label={store.theme === "ink" ? "Switch to paper" : "Switch to ink"}
+              className="desktop-only text-muted-foreground"
+              onClick={() => window.margin?.close()}
             >
-              {store.theme === "ink" ? "Paper" : "Ink"}
+              Close
             </Button>
-          ) : null}
+          </div>
         </header>
 
         {phase === "loading" ? <Loading /> : null}
@@ -258,7 +273,7 @@ export function MarginWidget() {
         {phase === "idle" && store ? (
           <div className="space-y-6">
             <div className="space-y-2">
-              <p className="font-serif text-[1.65rem] leading-tight tracking-[-0.02em]">
+              <p className="text-[1.45rem] font-medium leading-snug">
                 Park what interrupts you.
               </p>
               <p className="text-sm leading-relaxed text-muted-foreground">
@@ -325,7 +340,7 @@ export function MarginWidget() {
                   <span className="breathe inline-block size-1.5 rounded-full bg-foreground" aria-hidden />
                   {blockDone ? "Block finished" : "Studying"}
                 </p>
-                <p className="mt-1 font-mono text-3xl tabular-nums tracking-tight">
+                <p className="mt-1 text-3xl font-medium tabular-nums tracking-[0.08em]">
                   {formatElapsed(elapsed)}
                 </p>
               </div>
@@ -360,7 +375,7 @@ export function MarginWidget() {
               maxLength={4200}
               autoComplete="off"
               spellCheck
-              className="min-h-24 resize-none border-border bg-background/60 px-3 py-3 font-serif text-base leading-relaxed placeholder:italic md:text-base"
+              className="min-h-24 resize-none border-border bg-background/60 px-3 py-3 text-base leading-relaxed tracking-[0.01em] md:text-base"
             />
             <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
               <p>Return parks it. It stays hidden.</p>
@@ -389,8 +404,8 @@ export function MarginWidget() {
         {phase === "sealed" && active ? (
           <div>
             <p className="text-sm text-muted-foreground">Sitting closed</p>
-            <p className="mt-2 font-mono text-3xl tabular-nums tracking-tight">{formatElapsed(elapsed)}</p>
-            <p className="mt-4 font-serif text-xl leading-snug">
+            <p className="mt-2 text-3xl font-medium tabular-nums tracking-[0.08em]">{formatElapsed(elapsed)}</p>
+            <p className="mt-4 text-xl font-medium leading-snug tracking-[0.04em]">
               {active.thoughts.length === 0
                 ? "Nothing was held."
                 : `${active.thoughts.length} still put away.`}
@@ -470,7 +485,7 @@ function Reveal({
       <div className="mb-5 flex items-end justify-between gap-3">
         <div>
           <p className="text-sm text-muted-foreground">After</p>
-          <p className="mt-1 font-serif text-[1.65rem] leading-none tracking-[-0.02em]">{length}</p>
+          <p className="mt-1 text-[1.65rem] font-medium leading-none tracking-[0.04em]">{length}</p>
         </div>
         <p className="pb-1 text-sm text-muted-foreground tabular-nums">
           {formatWhen(sitting.startedAt)}
@@ -479,7 +494,7 @@ function Reveal({
         </p>
       </div>
       {sitting.thoughts.length === 0 ? (
-        <p className="font-serif text-xl">Nothing wandered in.</p>
+        <p className="text-xl font-medium tracking-[0.04em]">Nothing wandered in.</p>
       ) : (
         <ul className="max-h-[min(52vh,28rem)] space-y-5 overflow-y-auto pr-1">
           {sitting.thoughts.map((thought, index) => (
@@ -488,10 +503,10 @@ function Reveal({
               className="thought-row"
               style={{ animationDelay: `${Math.min(index, 12) * 40}ms` }}
             >
-              <p className="font-mono text-xs text-muted-foreground tabular-nums">
+              <p className="text-xs tracking-[0.14em] text-muted-foreground tabular-nums">
                 {formatElapsed(thought.offsetMs)}
               </p>
-              <p className="mt-1 font-serif text-[1.05rem] leading-relaxed whitespace-pre-wrap">
+              <p className="mt-1 text-[15px] leading-relaxed tracking-[0.01em] whitespace-pre-wrap">
                 {thought.text}
               </p>
             </li>

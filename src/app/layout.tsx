@@ -1,22 +1,11 @@
 import type { Metadata, Viewport } from "next"
-import { Geist, Geist_Mono, Newsreader } from "next/font/google"
+import { Geist } from "next/font/google"
 import Script from "next/script"
 import "./globals.css"
 
 const sans = Geist({
   subsets: ["latin"],
   variable: "--font-sans",
-})
-
-const mono = Geist_Mono({
-  subsets: ["latin"],
-  variable: "--font-mono",
-})
-
-const serif = Newsreader({
-  subsets: ["latin"],
-  style: ["normal", "italic"],
-  variable: "--font-serif",
 })
 
 export const metadata: Metadata = {
@@ -41,7 +30,7 @@ export const viewport: Viewport = {
   themeColor: "#272727",
 }
 
-const themeScript = `try{if(localStorage.getItem("margin.theme")==="paper")document.documentElement.classList.remove("dark")}catch(e){}`
+const themeScript = `try{if(location.search.indexOf("desktop=1")!==-1)document.documentElement.classList.add("desktop");if(localStorage.getItem("margin.theme")==="paper")document.documentElement.classList.remove("dark")}catch(e){}`
 
 export default function RootLayout({
   children,
@@ -51,7 +40,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`dark ${sans.variable} ${mono.variable} ${serif.variable}`}
+      className={`dark ${sans.variable}`}
       suppressHydrationWarning
     >
       <body className="antialiased">
