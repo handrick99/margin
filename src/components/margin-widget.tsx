@@ -1,0 +1,529 @@
+"use client"
+
+import { useEffect, useRef, useState } from "react"
+import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
+import {
+  archiveSitting,
+  createSitting,
+  formatElapsed,
+  formatLength,
+  formatWhen,
+  parkThought,
+  reveal,
+  resume,
+  seal,
+  sittingLength,
+  transcript,
+  type Sitting,
+  type Store,
+  type Theme,
+} from "@/lib/sitting"
+import { loadStore, saveStore } from "@/lib/storage"
+
+const LENGTHS: { label: string; minutes: number | null }[] = [
+  { label: "25 min", minutes: 25 },
+  { label: "50 min", minutes: 50 },
+  { label: "Open", minutes: null },
+]
+
+type Phase = "loading" | "idle" | "live" | "sealed" | "open"
+
+function phaseOf(store: Store | null, viewing: Sitting | null): Phase {
+  if (!store) return "loading"
+  if (viewing) return "open"
+  if (!store.active) return "idle"
+  if (store.active.revealedAt) return "open"
+  if (store.active.endedAt) return "sealed"
+  return "live"
+}
+
+function applyTheme(theme: Theme) {
+  document.documentElement.classList.toggle("dark", theme === "ink")
+  const color = theme === "ink" ? "#272727" : "#ececec"
+  const meta = document.querySelector('meta[name="theme-color"]')
+  if (meta) meta.setAttribute("content", color)
+}
+
+export function MarginWidget() {
+  const [store, setStore] = useState<Store | null>(null)
+  const [persistent, setPersistent] = useState(true)
+  const [draft, setDraft] = useState("")
+  const [target, setTarget] = useState<number | null>(25)
+  const [now, setNow] = useState(() => Date.now())
+  const [notice, setNotice] = useState<string | null>(null)
+  const [justHeld, setJustHeld] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
+  const [viewing, setViewing] = useState<Sitting | null>(null)
+  const draftRef = useRef("")
+  const storeRef = useRef<Store | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  const revealRef = useRef<HTMLButtonElement>(null)
+
+  storeRef.current = store
+  const phase = phaseOf(store, viewing)
+  const openSitting = viewing ?? (store?.active?.revealedAt ? store.active : null)
+
+  useEffect(() => {
+    const loaded = loadStore()
+    setStore(loaded.store)
+    setPersistent(loaded.persistent)
+    draftRef.current = loaded.store.active?.draft ?? ""
+    setDraft(loaded.store.active?.draft ?? "")
+    applyTheme(loaded.store.theme)
+  }, [])
+
+  useEffect(() => {
+    if (phase !== "live") return
+    const tick = () => setNow(Date.now())
+    const id = window.setInterval(tick, 1000)
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick()
+    }
+    document.addEventListener("visibilitychange", onVisible)
+    return () => {
+      window.clearInterval(id)
+      document.removeEventListener("visibilitychange", onVisible)
+    }
+  }, [phase])
+
+  useEffect(() => {
+    if (phase === "live") inputRef.current?.focus()
+    if (phase === "sealed") revealRef.current?.focus()
+  }, [phase])
+
+  useEffect(() => {
+    if (!store) return
+    const id = window.setTimeout(() => {
+      const current = storeRef.current
+      if (!current?.active || current.active.endedAt) return
+      if (current.active.draft === draft) return
+      const next = { ...current, active: { ...current.active, draft } }
+      storeRef.current = next
+      setStore(next)
+      setPersistent(saveStore(next))
+    }, 250)
+    return () => window.clearTimeout(id)
+  }, [draft, store])
+
+  useEffect(() => {
+    if (!justHeld) return
+    const id = window.setTimeout(() => setJustHeld(false), 900)
+    return () => window.clearTimeout(id)
+  }, [justHeld])
+
+  function persist(next: Store) {
+    storeRef.current = next
+    setStore(next)
+    setPersistent(saveStore(next))
+  }
+
+  function switchTheme() {
+    if (!store) return
+    const theme: Theme = store.theme === "ink" ? "paper" : "ink"
+    applyTheme(theme)
+    persist({ ...store, theme })
+  }
+
+  function begin() {
+    if (!store) return
+    setViewing(null)
+    setNotice(null)
+    setConfirmClear(false)
+    draftRef.current = ""
+    setDraft("")
+    persist({ ...store, active: createSitting(target, Date.now()) })
+  }
+
+  function parkCurrent() {
+    const current = storeRef.current
+    if (!current?.active || current.active.endedAt) return
+    const result = parkThought(current.active, draftRef.current, Date.now())
+    if (!result.ok) {
+      if (result.reason === "long") setNotice("Too long to hold. Shorten it a little.")
+      return
+    }
+    draftRef.current = ""
+    setDraft("")
+    setNotice(null)
+    setJustHeld(true)
+    persist({ ...current, active: result.sitting })
+  }
+
+  function endSitting() {
+    const current = storeRef.current
+    if (!current?.active || current.active.endedAt) return
+    let active = current.active
+    const pending = draftRef.current.trim()
+    if (pending) {
+      const result = parkThought(active, pending, Date.now())
+      if (!result.ok && result.reason === "long") {
+        setNotice("That line is too long to hold. Shorten it, or clear it, then end.")
+        return
+      }
+      if (result.ok) active = result.sitting
+    }
+    draftRef.current = ""
+    setDraft("")
+    setNotice(null)
+    persist({ ...current, active: seal(active, Date.now()) })
+  }
+
+  function onReveal() {
+    const current = storeRef.current
+    if (!current?.active) return
+    setNotice(null)
+    persist({ ...current, active: reveal(current.active, Date.now()) })
+  }
+
+  function onResume() {
+    const current = storeRef.current
+    if (!current?.active) return
+    setNotice(null)
+    persist({ ...current, active: resume(current.active) })
+  }
+
+  function finish() {
+    const current = storeRef.current
+    if (!current?.active) return
+    setViewing(null)
+    setConfirmClear(false)
+    setCopied(false)
+    setNotice(null)
+    persist(archiveSitting(current, current.active))
+  }
+
+  function discard() {
+    const current = storeRef.current
+    if (!current) return
+    if (viewing) {
+      persist({
+        ...current,
+        archive: current.archive.filter((item) => item.id !== viewing.id),
+      })
+      setViewing(null)
+    } else if (current.active) {
+      persist({ ...current, active: null })
+    }
+    setConfirmClear(false)
+    setCopied(false)
+    setNotice(null)
+  }
+
+  async function copyAll(sitting: Sitting) {
+    try {
+      await navigator.clipboard.writeText(transcript(sitting))
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      setNotice("Couldn’t copy. Select the thoughts instead.")
+    }
+  }
+
+  const active = store?.active ?? null
+  const elapsed = active ? sittingLength(active, now) : 0
+  const targetMs = active?.targetMinutes ? active.targetMinutes * 60_000 : null
+  const blockDone = phase === "live" && targetMs !== null && elapsed >= targetMs
+  const progress = targetMs ? Math.min(100, (elapsed / targetMs) * 100) : 0
+
+  return (
+    <main className="desk flex min-h-dvh items-start justify-center px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-10 sm:items-center">
+      <section
+        className="margin-widget w-[min(100%,24rem)] px-5 py-5 sm:px-6 sm:py-6"
+        aria-labelledby="margin-title"
+        aria-busy={phase === "loading"}
+        data-phase={phase}
+      >
+        <header className="mb-6 flex items-center justify-between gap-3">
+          <h1 id="margin-title" className="text-[13px] font-medium tracking-[0.22em]">
+            MARGIN
+          </h1>
+          {store ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground"
+              onClick={switchTheme}
+              aria-label={store.theme === "ink" ? "Switch to paper" : "Switch to ink"}
+            >
+              {store.theme === "ink" ? "Paper" : "Ink"}
+            </Button>
+          ) : null}
+        </header>
+
+        {phase === "loading" ? <Loading /> : null}
+
+        {phase === "idle" && store ? (
+          <div className="space-y-6">
+            <div className="space-y-2">
+              <p className="font-serif text-[1.65rem] leading-tight tracking-[-0.02em]">
+                Park what interrupts you.
+              </p>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                Thoughts stay closed until you end the sitting and ask to see them.
+              </p>
+            </div>
+            <div className="grid grid-cols-3 gap-1 rounded-2xl bg-muted p-1" role="group" aria-label="Sitting length">
+              {LENGTHS.map((option) => {
+                const selected = target === option.minutes
+                return (
+                  <Button
+                    key={option.label}
+                    type="button"
+                    variant={selected ? "default" : "ghost"}
+                    className="h-9"
+                    aria-pressed={selected}
+                    onClick={() => setTarget(option.minutes)}
+                  >
+                    {option.label}
+                  </Button>
+                )
+              })}
+            </div>
+            <Button type="button" className="h-11 w-full" onClick={begin}>
+              Begin sitting
+            </Button>
+            {store.archive.length > 0 ? (
+              <div>
+                <p className="mb-1 text-[11px] tracking-[0.16em] text-muted-foreground uppercase">
+                  Earlier
+                </p>
+                <ul className="max-h-48 overflow-y-auto">
+                  {store.archive.map((sitting) => (
+                    <li key={sitting.id} className="border-b border-border last:border-b-0">
+                      <button
+                        type="button"
+                        className="flex w-full items-baseline justify-between gap-3 py-2.5 text-left text-sm"
+                        onClick={() => {
+                          setNotice(null)
+                          setConfirmClear(false)
+                          setViewing(sitting)
+                        }}
+                      >
+                        <span>{formatWhen(sitting.startedAt)}</span>
+                        <span className="text-muted-foreground tabular-nums">
+                          {formatLength(sittingLength(sitting, sitting.endedAt ?? sitting.startedAt))}
+                          {" · "}
+                          {sitting.thoughts.length}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {phase === "live" && active ? (
+          <div>
+            <div className="mb-5 flex items-end justify-between gap-3">
+              <div>
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <span className="breathe inline-block size-1.5 rounded-full bg-foreground" aria-hidden />
+                  {blockDone ? "Block finished" : "Studying"}
+                </p>
+                <p className="mt-1 font-mono text-3xl tabular-nums tracking-tight">
+                  {formatElapsed(elapsed)}
+                </p>
+              </div>
+              <p className="pb-1 text-sm text-muted-foreground">
+                {active.targetMinutes ? `${active.targetMinutes} min` : "Open"}
+              </p>
+            </div>
+            {targetMs ? (
+              <div className="mb-5 h-px w-full bg-border" aria-hidden>
+                <div className="h-px bg-foreground/80" style={{ width: `${progress}%` }} />
+              </div>
+            ) : null}
+            {blockDone ? (
+              <p className="mb-4 text-sm text-muted-foreground">The block is finished. Stay, or end it.</p>
+            ) : null}
+            <Textarea
+              ref={inputRef}
+              value={draft}
+              onChange={(event) => {
+                draftRef.current = event.target.value
+                setDraft(event.target.value)
+                if (notice) setNotice(null)
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return
+                event.preventDefault()
+                parkCurrent()
+              }}
+              placeholder="A thought, then return"
+              aria-label="Thought to park"
+              rows={3}
+              maxLength={4200}
+              autoComplete="off"
+              spellCheck
+              className="min-h-24 resize-none border-border bg-background/60 px-3 py-3 font-serif text-base leading-relaxed placeholder:italic md:text-base"
+            />
+            <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+              <p>Return parks it. It stays hidden.</p>
+              {draft.length > 3600 ? <p className="tabular-nums">{4000 - draft.trim().length}</p> : null}
+            </div>
+            {notice ? <p className="mt-3 text-sm">{notice}</p> : null}
+            <div className="mt-5 flex items-center justify-between gap-3">
+              <p className="text-sm tabular-nums" aria-live="polite">
+                {justHeld ? (
+                  <span>Held</span>
+                ) : active.thoughts.length === 0 ? (
+                  <span className="text-muted-foreground">Nothing held yet</span>
+                ) : (
+                  <span>
+                    {active.thoughts.length} held
+                  </span>
+                )}
+              </p>
+              <Button type="button" variant="outline" className="h-10 px-4" onClick={endSitting}>
+                End sitting
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
+        {phase === "sealed" && active ? (
+          <div>
+            <p className="text-sm text-muted-foreground">Sitting closed</p>
+            <p className="mt-2 font-mono text-3xl tabular-nums tracking-tight">{formatElapsed(elapsed)}</p>
+            <p className="mt-4 font-serif text-xl leading-snug">
+              {active.thoughts.length === 0
+                ? "Nothing was held."
+                : `${active.thoughts.length} still put away.`}
+            </p>
+            <p className="mt-2 text-sm text-muted-foreground">They stay closed until you reveal them.</p>
+            {notice ? <p className="mt-3 text-sm">{notice}</p> : null}
+            <div className="mt-6 flex flex-col gap-2">
+              <Button type="button" className="h-11" ref={revealRef} onClick={onReveal}>
+                Reveal
+              </Button>
+              <Button type="button" variant="ghost" onClick={onResume}>
+                Resume
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
+        {phase === "open" && openSitting ? (
+          <Reveal
+            sitting={openSitting}
+            fromArchive={viewing !== null}
+            copied={copied}
+            confirmClear={confirmClear}
+            notice={notice}
+            onCopy={() => copyAll(openSitting)}
+            onDone={viewing ? () => setViewing(null) : finish}
+            onAskClear={() => setConfirmClear(true)}
+            onCancelClear={() => setConfirmClear(false)}
+            onDiscard={discard}
+          />
+        ) : null}
+
+        {!persistent && phase !== "loading" ? (
+          <p className="mt-5 text-xs text-muted-foreground">This sitting stays in this tab only.</p>
+        ) : null}
+      </section>
+    </main>
+  )
+}
+
+function Loading() {
+  return (
+    <div className="space-y-3" aria-hidden>
+      <div className="h-7 w-40 rounded-md bg-muted" />
+      <div className="h-4 w-full rounded-md bg-muted" />
+      <div className="h-11 w-full rounded-xl bg-muted" />
+    </div>
+  )
+}
+
+function Reveal({
+  sitting,
+  fromArchive,
+  copied,
+  confirmClear,
+  notice,
+  onCopy,
+  onDone,
+  onAskClear,
+  onCancelClear,
+  onDiscard,
+}: {
+  sitting: Sitting
+  fromArchive: boolean
+  copied: boolean
+  confirmClear: boolean
+  notice: string | null
+  onCopy: () => void
+  onDone: () => void
+  onAskClear: () => void
+  onCancelClear: () => void
+  onDiscard: () => void
+}) {
+  const length = formatLength(sittingLength(sitting, sitting.endedAt ?? sitting.startedAt))
+  return (
+    <div>
+      <div className="mb-5 flex items-end justify-between gap-3">
+        <div>
+          <p className="text-sm text-muted-foreground">After</p>
+          <p className="mt-1 font-serif text-[1.65rem] leading-none tracking-[-0.02em]">{length}</p>
+        </div>
+        <p className="pb-1 text-sm text-muted-foreground tabular-nums">
+          {formatWhen(sitting.startedAt)}
+          {" · "}
+          {sitting.thoughts.length}
+        </p>
+      </div>
+      {sitting.thoughts.length === 0 ? (
+        <p className="font-serif text-xl">Nothing wandered in.</p>
+      ) : (
+        <ul className="max-h-[min(52vh,28rem)] space-y-5 overflow-y-auto pr-1">
+          {sitting.thoughts.map((thought, index) => (
+            <li
+              key={thought.id}
+              className="thought-row"
+              style={{ animationDelay: `${Math.min(index, 12) * 40}ms` }}
+            >
+              <p className="font-mono text-xs text-muted-foreground tabular-nums">
+                {formatElapsed(thought.offsetMs)}
+              </p>
+              <p className="mt-1 font-serif text-[1.05rem] leading-relaxed whitespace-pre-wrap">
+                {thought.text}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {notice ? <p className="mt-4 text-sm">{notice}</p> : null}
+      {confirmClear ? (
+        <div className="mt-6">
+          <p className="text-sm">Discard this sitting?</p>
+          <div className="mt-3 flex gap-2">
+            <Button type="button" variant="outline" className="h-10 flex-1" onClick={onCancelClear}>
+              Keep
+            </Button>
+            <Button type="button" className="h-10 flex-1" onClick={onDiscard}>
+              Discard
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-6 flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" className="h-10" onClick={onCopy}>
+            {copied ? "Copied" : "Copy"}
+          </Button>
+          <Button type="button" variant="ghost" className="h-10" onClick={onAskClear}>
+            Discard
+          </Button>
+          <Button type="button" className="ml-auto h-10" onClick={onDone}>
+            {fromArchive ? "Back" : "Done"}
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
