@@ -22,6 +22,8 @@ export type Store = {
   archive: Sitting[]
 }
 
+export type ScreenName = "idle" | "live" | "sealed" | "open"
+
 export const MAX_THOUGHT = 4000
 export const MAX_ARCHIVE = 40
 
@@ -66,8 +68,26 @@ export function seal(sitting: Sitting, now: number): Sitting {
   return { ...sitting, endedAt: now, draft: "" }
 }
 
-export function resume(sitting: Sitting): Sitting {
-  return { ...sitting, endedAt: null, revealedAt: null }
+export function closeSitting(
+  sitting: Sitting,
+  now: number,
+): { ok: true; sitting: Sitting } | { ok: false; reason: "long" } {
+  const pending = sitting.draft.trim()
+  if (!pending) return { ok: true, sitting: seal({ ...sitting, draft: "" }, now) }
+  const parked = parkThought(sitting, sitting.draft, now)
+  if (!parked.ok) return { ok: false, reason: "long" }
+  return { ok: true, sitting: seal(parked.sitting, now) }
+}
+
+export function resume(sitting: Sitting, now: number): Sitting {
+  if (sitting.endedAt == null) return { ...sitting, revealedAt: null }
+  const elapsed = Math.max(0, sitting.endedAt - sitting.startedAt)
+  return {
+    ...sitting,
+    startedAt: now - elapsed,
+    endedAt: null,
+    revealedAt: null,
+  }
 }
 
 export function reveal(sitting: Sitting, now: number): Sitting {
@@ -116,52 +136,81 @@ export function transcript(sitting: Sitting): string {
   return `Margin · ${when} · ${length}\n\n${body}`
 }
 
+export function screenFor(store: Store, viewingId: string | null): ScreenName {
+  const active = store.active
+  if (active && active.revealedAt == null && active.endedAt != null) return "sealed"
+  if (active && active.revealedAt == null) return "live"
+  if (active?.revealedAt) return "open"
+  if (viewingId && store.archive.some((item) => item.id === viewingId)) return "open"
+  return "idle"
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 function sanitizeThought(value: unknown): Thought | null {
   if (!isRecord(value)) return null
-  if (typeof value.id !== "string" || typeof value.text !== "string") return null
+  if (typeof value.id !== "string" || value.id.length === 0 || value.id.length > 80) return null
+  if (typeof value.text !== "string") return null
+  const text = value.text.trim()
+  if (!text || text.length > MAX_THOUGHT) return null
   if (typeof value.offsetMs !== "number" || !Number.isFinite(value.offsetMs)) return null
-  return { id: value.id, text: value.text, offsetMs: Math.max(0, value.offsetMs) }
+  return { id: value.id, text, offsetMs: Math.max(0, value.offsetMs) }
+}
+
+function sanitizeTarget(value: unknown): number | null {
+  return value === 25 || value === 50 ? value : null
 }
 
 export function sanitizeSitting(value: unknown): Sitting | null {
   if (!isRecord(value)) return null
-  if (typeof value.id !== "string" || typeof value.startedAt !== "number") return null
+  if (typeof value.id !== "string" || value.id.length === 0) return null
+  if (typeof value.startedAt !== "number" || !Number.isFinite(value.startedAt)) return null
   const thoughts = Array.isArray(value.thoughts)
     ? value.thoughts.flatMap((thought) => {
         const clean = sanitizeThought(thought)
         return clean ? [clean] : []
-      })
+      }).slice(0, 500)
     : []
+  const draft = typeof value.draft === "string" ? value.draft.slice(0, 8000) : ""
   return {
-    id: value.id,
+    id: value.id.slice(0, 80),
     startedAt: value.startedAt,
-    endedAt: typeof value.endedAt === "number" ? value.endedAt : null,
-    revealedAt: typeof value.revealedAt === "number" ? value.revealedAt : null,
-    targetMinutes: typeof value.targetMinutes === "number" ? value.targetMinutes : null,
+    endedAt: typeof value.endedAt === "number" && Number.isFinite(value.endedAt) ? value.endedAt : null,
+    revealedAt:
+      typeof value.revealedAt === "number" && Number.isFinite(value.revealedAt) ? value.revealedAt : null,
+    targetMinutes: sanitizeTarget(value.targetMinutes),
     thoughts,
-    draft: typeof value.draft === "string" ? value.draft : "",
+    draft,
   }
 }
 
 export function sanitizeStore(value: unknown, theme: Theme): Store {
   if (!isRecord(value)) return { theme, active: null, archive: [] }
-  const storedTheme: Theme = value.theme === "paper" || value.theme === "ink" ? value.theme : theme
-  const archive = Array.isArray(value.archive)
-    ? value.archive
-        .flatMap((sitting) => {
-          const clean = sanitizeSitting(sitting)
-          return clean ? [clean] : []
-        })
-        .slice(0, MAX_ARCHIVE)
-    : []
+  const seen = new Set<string>()
+  const archive: Sitting[] = []
+  if (Array.isArray(value.archive)) {
+    for (const item of value.archive) {
+      const clean = sanitizeSitting(item)
+      if (!clean || seen.has(clean.id)) continue
+      seen.add(clean.id)
+      archive.push(clean)
+      if (archive.length >= MAX_ARCHIVE) break
+    }
+  }
   return {
-    theme: storedTheme,
+    theme,
     active: sanitizeSitting(value.active),
     archive,
+  }
+}
+
+export function parseStore(raw: string, theme: Theme): Store {
+  try {
+    return sanitizeStore(JSON.parse(raw) as unknown, theme)
+  } catch {
+    return { theme, active: null, archive: [] }
   }
 }
 

@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next"
-import { Geist } from "next/font/google"
+import { Geist, Geist_Mono, Newsreader } from "next/font/google"
 import Script from "next/script"
 import "./globals.css"
 
@@ -8,9 +8,21 @@ const sans = Geist({
   variable: "--font-sans",
 })
 
+const mono = Geist_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+})
+
+const serif = Newsreader({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-serif",
+  display: "swap",
+})
+
 export const metadata: Metadata = {
   title: "Margin",
-  description: "Park stray thoughts during a study sitting. Reveal them when you stop.",
+  description: "Park what interrupts a study sitting. It stays closed until you end it.",
   applicationName: "Margin",
   appleWebApp: {
     capable: true,
@@ -27,10 +39,10 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#272727",
+  themeColor: "#171717",
 }
 
-const themeScript = `try{if(location.search.indexOf("desktop=1")!==-1)document.documentElement.classList.add("desktop");if(localStorage.getItem("margin.theme")==="paper")document.documentElement.classList.remove("dark")}catch(e){}`
+const themeScript = `try{if(localStorage.getItem("margin.theme")==="paper")document.documentElement.classList.remove("dark")}catch(e){}`
 
 export default function RootLayout({
   children,
@@ -40,9 +52,12 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`dark ${sans.variable}`}
+      className={`dark ${sans.variable} ${mono.variable} ${serif.variable}`}
       suppressHydrationWarning
     >
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className="antialiased">
         <Script id="margin-theme" strategy="beforeInteractive">
           {themeScript}
