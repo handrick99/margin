@@ -1,37 +1,62 @@
 {
   "name": "margin",
+  "productName": "Margin",
   "version": "0.1.0",
+  "description": "A grayscale study widget that keeps stray thoughts closed until the sitting ends.",
+  "author": "handrick99",
   "private": true,
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "next dev --turbopack -H 0.0.0.0 -p 3847",
-    "desktop": "concurrently -k -n web,app \"npm run dev\" \"wait-on http://127.0.0.1:3847 && electron .\"",
+    "desktop": "concurrently -k -n web,app \"npm run dev\" \"wait-on http://127.0.0.1:3847 && MARGIN_DEV_URL=http://127.0.0.1:3847/ electron .\"",
     "build": "next build --turbopack",
-    "start": "next start",
+    "app": "npm run build && electron .",
+    "dist:mac": "npm run build && electron-builder --mac zip --arm64 --x64",
     "lint": "eslint"
   },
-  "dependencies": {
-    "@base-ui/react": "^1.9.0",
-    "class-variance-authority": "^0.7.1",
-    "cn": "^0.5.2",
-    "lucide-react": "^1.67.0",
-    "next": "15.5.29",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "shadcn": "^4.23.0",
-    "tw-animate-css": "^1.4.0"
+  "build": {
+    "appId": "com.handrick99.margin",
+    "productName": "Margin",
+    "electronLanguages": [
+      "en"
+    ],
+    "files": [
+      "electron/**",
+      "out/**",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
+      "identity": "-"
+    },
+    "artifactName": "Margin-${version}-mac-${arch}.${ext}"
   },
   "devDependencies": {
+    "@base-ui/react": "^1.9.0",
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "class-variance-authority": "^0.7.1",
+    "cn": "^0.5.2",
     "concurrently": "^10.0.6",
     "electron": "^45.2.2",
+    "electron-builder": "^26.18.0",
     "eslint": "^9",
     "eslint-config-next": "15.5.29",
+    "lucide-react": "^1.67.0",
+    "next": "15.5.29",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "shadcn": "^4.23.0",
     "tailwindcss": "^4",
+    "tw-animate-css": "^1.4.0",
     "typescript": "^5",
     "wait-on": "^9.5.1"
   }

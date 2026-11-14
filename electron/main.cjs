@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require("electron")
+const { app, BrowserWindow, ipcMain, protocol } = require("electron")
 const fs = require("fs")
 const path = require("path")
 
@@ -8,7 +8,46 @@ if (process.platform === "linux") {
 
 app.setName("Margin")
 
-const port = process.env.PORT || "3847"
+const devUrl = process.env.MARGIN_DEV_URL
+const webRoot = path.join(__dirname, "..", "out")
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "app",
+    privileges: { standard: true, secure: true, supportFetchAPI: true },
+  },
+])
+
+const mimeTypes = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json",
+  ".webmanifest": "application/manifest+json",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
+  ".txt": "text/plain; charset=utf-8",
+}
+
+function serveBundledApp() {
+  protocol.handle("app", async (request) => {
+    const { pathname } = new URL(request.url)
+    let relative = decodeURIComponent(pathname)
+    if (relative.endsWith("/")) relative += "index.html"
+    const file = path.normalize(path.join(webRoot, relative))
+    if (!file.startsWith(webRoot)) return new Response("Not found", { status: 404 })
+    try {
+      const body = await fs.promises.readFile(file)
+      const type = mimeTypes[path.extname(file)] || "application/octet-stream"
+      return new Response(body, { headers: { "content-type": type } })
+    } catch {
+      return new Response("Not found", { status: 404 })
+    }
+  })
+}
+
 const boundsPath = () => path.join(app.getPath("userData"), "window.json")
 
 function readBounds() {
@@ -56,7 +95,7 @@ function createWindow() {
   if (process.platform === "darwin") {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   }
-  win.loadURL(`http://127.0.0.1:${port}/?desktop=1`)
+  win.loadURL(`${devUrl || "app://margin/"}?desktop=1`)
   win.once("ready-to-show", () => win?.show())
   win.on("move", () => win && saveBounds(win))
   win.on("resize", () => win && saveBounds(win))
@@ -80,6 +119,9 @@ if (!hasLock) {
     win.show()
     win.focus()
   })
-  app.whenReady().then(createWindow)
+  app.whenReady().then(() => {
+    if (!devUrl) serveBundledApp()
+    createWindow()
+  })
   app.on("window-all-closed", () => app.quit())
 }
