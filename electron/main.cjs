@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, protocol } = require("electron")
+const { app, BrowserWindow, ipcMain, protocol, screen } = require("electron")
 const fs = require("fs")
 const path = require("path")
 
@@ -68,7 +68,11 @@ function readState() {
   return { width: 420, height: 520, x: undefined, y: undefined, fullscreen: true }
 }
 
-function saveState(win) {
+function windowIsFullscreen() {
+  return filled
+}
+
+function saveState(win, fullscreen = filled) {
   if (win.isDestroyed()) return
   let previous = { width: 420, height: 520 }
   try {
@@ -76,7 +80,6 @@ function saveState(win) {
   } catch {
     // Keep the default window size for the next time fullscreen exits.
   }
-  const fullscreen = win.isFullScreen()
   const bounds = fullscreen
     ? {
         width: Number.isFinite(previous.width) ? previous.width : 420,
@@ -96,7 +99,28 @@ function applyOverlay(win, fullscreen) {
   }
 }
 
+function setFilled(win, fullscreen) {
+  resizing = true
+  applyOverlay(win, fullscreen)
+  if (process.platform === "darwin") {
+    if (windowIsFullscreen(win) !== fullscreen) win.setSimpleFullScreen(fullscreen)
+    if (!fullscreen) {
+      const state = readState()
+      const bounds = { width: state.width, height: state.height }
+      if (state.x !== undefined) bounds.x = state.x
+      if (state.y !== undefined) bounds.y = state.y
+      win.setBounds(bounds)
+    }
+  } else if (win.isFullScreen() !== fullscreen) {
+    win.setFullScreen(fullscreen)
+  }
+  saveState(win, fullscreen)
+  resizing = false
+  if (!win.webContents.isDestroyed()) win.webContents.send("fullscreen-changed", fullscreen)
+}
+
 let win = null
+let resizing = false
 
 function createWindow() {
   const state = readState()
@@ -109,7 +133,7 @@ function createWindow() {
     minHeight: 460,
     show: false,
     frame: false,
-    fullscreen: state.fullscreen,
+    fullscreenable: true,
     backgroundColor: "#141414",
     autoHideMenuBar: true,
     alwaysOnTop: !state.fullscreen,
@@ -123,26 +147,20 @@ function createWindow() {
   })
 
   win.removeMenu()
-  applyOverlay(win, state.fullscreen)
+  applyOverlay(win, false)
   win.loadURL(`${devUrl || "app://margin/"}?desktop=1`)
-  win.once("ready-to-show", () => win?.show())
+  win.once("ready-to-show", () => {
+    if (!win) return
+    win.show()
+    if (state.fullscreen) setFilled(win, true)
+  })
   win.on("move", () => {
-    if (win && !win.isFullScreen()) saveState(win)
+    if (resizing || !win || windowIsFullscreen(win)) return
+    saveState(win)
   })
   win.on("resize", () => {
-    if (win && !win.isFullScreen()) saveState(win)
-  })
-  win.on("enter-full-screen", () => {
-    if (!win) return
-    applyOverlay(win, true)
+    if (resizing || !win || windowIsFullscreen(win)) return
     saveState(win)
-    win.webContents.send("fullscreen-changed", true)
-  })
-  win.on("leave-full-screen", () => {
-    if (!win) return
-    applyOverlay(win, false)
-    saveState(win)
-    win.webContents.send("fullscreen-changed", false)
   })
 }
 
@@ -150,9 +168,9 @@ ipcMain.on("window-close", () => win?.close())
 ipcMain.on("window-minimize", () => win?.minimize())
 ipcMain.on("window-fullscreen", () => {
   if (!win) return
-  win.setFullScreen(!win.isFullScreen())
+  setFilled(win, !windowIsFullscreen(win))
 })
-ipcMain.handle("window-is-fullscreen", () => win?.isFullScreen() ?? false)
+ipcMain.handle("window-is-fullscreen", () => (win ? windowIsFullscreen(win) : false))
 ipcMain.on("window-background", (_event, color) => {
   if (typeof color === "string" && /^#[0-9a-fA-F]{6}$/.test(color)) {
     win?.setBackgroundColor(color)
