@@ -153,12 +153,12 @@ html.dark {
 }
 
 .margin-widget {
-  border-radius: 28px;
+  border-radius: 22px;
   background: var(--card);
   border: 1px solid var(--border);
   box-shadow:
-    0 1px 0 oklch(1 0 0 / 0.06) inset,
-    0 22px 50px oklch(0 0 0 / 0.16);
+    0 1px 0 oklch(1 0 0 / 0.05) inset,
+    0 16px 36px oklch(0 0 0 / 0.12);
 }
 
 @keyframes breathe {
@@ -210,25 +210,40 @@ html.desktop body {
 html.desktop .desk {
   height: 100%;
   min-height: 100%;
-  padding: 14px;
+  padding: 12px;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
   background-image: none;
 }
 
 html.desktop .margin-widget {
-  width: 100%;
-  max-width: none;
+  width: min(100%, 24rem);
   height: 100%;
+  max-height: 100%;
+  min-height: 0;
   overflow: auto;
 }
 
 html.desktop.fullscreen .desk {
-  padding: 0;
+  align-items: center;
+  padding:
+    max(2rem, env(safe-area-inset-top))
+    1.5rem
+    max(2.5rem, env(safe-area-inset-bottom));
+  background-image: radial-gradient(680px 340px at 50% 42%, oklch(1 0 0 / 0.45), transparent 70%);
+}
+
+html.dark.desktop.fullscreen .desk {
+  background-image: radial-gradient(680px 340px at 50% 42%, oklch(1 0 0 / 0.05), transparent 68%);
 }
 
 html.desktop.fullscreen .margin-widget {
+  height: auto;
   border: none;
   border-radius: 0;
   box-shadow: none;
+  background: transparent;
 }
 
 html.desktop .desktop-only {

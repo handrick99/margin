@@ -68,62 +68,47 @@ function readState() {
   return { width: 420, height: 520, x: undefined, y: undefined, fullscreen: true }
 }
 
+let win = null
+let filled = false
+let windowed = null
+let settled = false
+
 function windowIsFullscreen() {
   return filled
 }
 
-function saveState(win, fullscreen = filled) {
-  if (win.isDestroyed()) return
-  let previous = { width: 420, height: 520 }
-  try {
-    previous = JSON.parse(fs.readFileSync(boundsPath(), "utf8"))
-  } catch {
-    // Keep the default window size for the next time fullscreen exits.
-  }
-  const bounds = fullscreen
-    ? {
-        width: Number.isFinite(previous.width) ? previous.width : 420,
-        height: Number.isFinite(previous.height) ? previous.height : 520,
-        x: Number.isFinite(previous.x) ? previous.x : undefined,
-        y: Number.isFinite(previous.y) ? previous.y : undefined,
-      }
-    : win.getBounds()
+function saveState() {
+  if (!win || win.isDestroyed()) return
+  const bounds = windowed || win.getBounds()
   fs.mkdirSync(path.dirname(boundsPath()), { recursive: true })
-  fs.writeFileSync(boundsPath(), JSON.stringify({ ...bounds, fullscreen }))
+  fs.writeFileSync(boundsPath(), JSON.stringify({ ...bounds, fullscreen: filled }))
 }
 
-function applyOverlay(win, fullscreen) {
-  win.setAlwaysOnTop(!fullscreen, "floating")
-  if (process.platform === "darwin") {
-    win.setVisibleOnAllWorkspaces(!fullscreen, { visibleOnFullScreen: true })
-  }
-}
-
-function setFilled(win, fullscreen) {
-  resizing = true
-  applyOverlay(win, fullscreen)
-  if (process.platform === "darwin") {
-    if (windowIsFullscreen(win) !== fullscreen) win.setSimpleFullScreen(fullscreen)
-    if (!fullscreen) {
-      const state = readState()
-      const bounds = { width: state.width, height: state.height }
-      if (state.x !== undefined) bounds.x = state.x
-      if (state.y !== undefined) bounds.y = state.y
-      win.setBounds(bounds)
+function setFilled(next) {
+  if (!win || next === filled) return
+  if (next) windowed = win.getBounds()
+  filled = next
+  if (next) {
+    const area = screen.getPrimaryDisplay().bounds
+    win.setAlwaysOnTop(true, "screen-saver")
+    win.setPosition(area.x, area.y)
+    win.setSize(area.width, area.height)
+    if (process.platform === "darwin") win.setSimpleFullScreen(true)
+  } else {
+    if (process.platform === "darwin") win.setSimpleFullScreen(false)
+    win.setAlwaysOnTop(true, "floating")
+    if (process.platform === "darwin") {
+      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
     }
-  } else if (win.isFullScreen() !== fullscreen) {
-    win.setFullScreen(fullscreen)
+    if (windowed) win.setBounds(windowed)
   }
-  saveState(win, fullscreen)
-  resizing = false
-  if (!win.webContents.isDestroyed()) win.webContents.send("fullscreen-changed", fullscreen)
+  saveState()
+  if (!win.webContents.isDestroyed()) win.webContents.send("fullscreen-changed", filled)
 }
-
-let win = null
-let resizing = false
 
 function createWindow() {
   const state = readState()
+  windowed = { width: state.width, height: state.height, x: state.x, y: state.y }
   win = new BrowserWindow({
     width: state.width,
     height: state.height,
@@ -133,10 +118,9 @@ function createWindow() {
     minHeight: 460,
     show: false,
     frame: false,
-    fullscreenable: true,
     backgroundColor: "#141414",
     autoHideMenuBar: true,
-    alwaysOnTop: !state.fullscreen,
+    alwaysOnTop: true,
     title: "Margin",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -147,30 +131,32 @@ function createWindow() {
   })
 
   win.removeMenu()
-  applyOverlay(win, false)
+  if (process.platform === "darwin") {
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  }
   win.loadURL(`${devUrl || "app://margin/"}?desktop=1`)
   win.once("ready-to-show", () => {
     if (!win) return
     win.show()
-    if (state.fullscreen) setFilled(win, true)
+    if (state.fullscreen) setFilled(true)
+    settled = true
   })
   win.on("move", () => {
-    if (resizing || !win || windowIsFullscreen(win)) return
-    saveState(win)
+    if (!settled || !win || filled) return
+    windowed = win.getBounds()
+    saveState()
   })
   win.on("resize", () => {
-    if (resizing || !win || windowIsFullscreen(win)) return
-    saveState(win)
+    if (!settled || !win || filled) return
+    windowed = win.getBounds()
+    saveState()
   })
 }
 
 ipcMain.on("window-close", () => win?.close())
 ipcMain.on("window-minimize", () => win?.minimize())
-ipcMain.on("window-fullscreen", () => {
-  if (!win) return
-  setFilled(win, !windowIsFullscreen(win))
-})
-ipcMain.handle("window-is-fullscreen", () => (win ? windowIsFullscreen(win) : false))
+ipcMain.on("window-fullscreen", () => setFilled(!filled))
+ipcMain.handle("window-is-fullscreen", () => filled)
 ipcMain.on("window-background", (_event, color) => {
   if (typeof color === "string" && /^#[0-9a-fA-F]{6}$/.test(color)) {
     win?.setBackgroundColor(color)
@@ -190,6 +176,9 @@ if (!hasLock) {
   app.whenReady().then(() => {
     if (!devUrl) serveBundledApp()
     createWindow()
+  })
+  app.on("before-quit", () => {
+    if (process.platform === "darwin") app.dock.show()
   })
   app.on("window-all-closed", () => app.quit())
 }

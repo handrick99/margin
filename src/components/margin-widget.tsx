@@ -260,17 +260,17 @@ export function MarginWidget() {
         aria-busy={phase === "loading"}
         data-phase={phase}
       >
-        <header className="drag mb-6 flex items-center justify-between gap-3">
-          <h1 id="margin-title" className="text-[13px] font-medium tracking-[0.22em]">
+        <header className="drag mb-8 flex items-center justify-between gap-3">
+          <h1 id="margin-title" className="text-[11px] font-medium tracking-[0.28em]">
             MARGIN
           </h1>
-          <div className="flex items-center">
+          <div className="flex items-center gap-0.5">
             {store ? (
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="text-muted-foreground"
+                className="h-7 px-1.5 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
                 onClick={switchTheme}
                 aria-label={store.theme === "ink" ? "Switch to paper" : "Switch to ink"}
               >
@@ -281,7 +281,7 @@ export function MarginWidget() {
               type="button"
               variant="ghost"
               size="sm"
-              className="desktop-only text-muted-foreground"
+              className="desktop-only h-7 px-1.5 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
               onClick={() => window.margin?.toggleFullscreen()}
             >
               {fullscreen ? "Window" : "Full"}
@@ -290,7 +290,7 @@ export function MarginWidget() {
               type="button"
               variant="ghost"
               size="sm"
-              className="desktop-only text-muted-foreground"
+              className="desktop-only h-7 px-1.5 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
               onClick={() => window.margin?.close()}
             >
               Close
@@ -301,33 +301,36 @@ export function MarginWidget() {
         {phase === "loading" ? <Loading /> : null}
 
         {phase === "idle" && store ? (
-          <div className="space-y-6">
+          <div className="space-y-7">
             <div className="space-y-2">
-              <p className="text-[1.45rem] font-medium leading-snug">
+              <p className="text-[1.65rem] font-medium leading-snug tracking-[-0.02em]">
                 Park what interrupts you.
               </p>
               <p className="text-sm leading-relaxed text-muted-foreground">
                 Thoughts stay closed until you end the sitting and ask to see them.
               </p>
             </div>
-            <div className="grid grid-cols-3 gap-1 rounded-2xl bg-muted p-1" role="group" aria-label="Sitting length">
+            <div className="flex items-center gap-5" role="group" aria-label="Sitting length">
               {LENGTHS.map((option) => {
                 const selected = target === option.minutes
                 return (
-                  <Button
+                  <button
                     key={option.label}
                     type="button"
-                    variant={selected ? "default" : "ghost"}
-                    className="h-9"
                     aria-pressed={selected}
                     onClick={() => setTarget(option.minutes)}
+                    className={`rounded-sm py-1 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 ${
+                      selected ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+                    }`}
                   >
-                    {option.label}
-                  </Button>
+                    <span className={selected ? "border-b border-foreground pb-px" : undefined}>
+                      {option.label}
+                    </span>
+                  </button>
                 )
               })}
             </div>
-            <Button type="button" className="h-11 w-full" onClick={begin}>
+            <Button type="button" className="h-10 w-full" onClick={begin}>
               Begin sitting
             </Button>
             {store.archive.length > 0 ? (
@@ -364,13 +367,13 @@ export function MarginWidget() {
 
         {phase === "live" && active ? (
           <div>
-            <div className="mb-5 flex items-end justify-between gap-3">
+            <div className="mb-6 flex items-end justify-between gap-3">
               <div>
-                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <p className="flex items-center gap-2 text-[13px] text-muted-foreground">
                   <span className="breathe inline-block size-1.5 rounded-full bg-foreground" aria-hidden />
                   {blockDone ? "Block finished" : "Studying"}
                 </p>
-                <p className="mt-1 text-3xl font-medium tabular-nums tracking-[0.08em]">
+                <p className="mt-1 text-[2.75rem] leading-none font-medium tabular-nums tracking-[-0.045em]">
                   {formatElapsed(elapsed)}
                 </p>
               </div>
@@ -379,8 +382,8 @@ export function MarginWidget() {
               </p>
             </div>
             {targetMs ? (
-              <div className="mb-5 h-px w-full bg-border" aria-hidden>
-                <div className="h-px bg-foreground/80" style={{ width: `${progress}%` }} />
+              <div className="mb-6 h-px w-full bg-foreground/15" aria-hidden>
+                <div className="h-px bg-foreground" style={{ width: `${progress}%` }} />
               </div>
             ) : null}
             {blockDone ? (
@@ -401,11 +404,11 @@ export function MarginWidget() {
               }}
               placeholder="A thought, then return"
               aria-label="Thought to park"
-              rows={3}
+              rows={2}
               maxLength={4200}
               autoComplete="off"
               spellCheck
-              className="min-h-24 resize-none border-border bg-background/60 px-3 py-3 text-base leading-relaxed tracking-[0.01em] md:text-base"
+              className="min-h-14 resize-none rounded-none border-0 border-b border-foreground/15 bg-transparent px-0 py-2 text-base leading-relaxed tracking-[0.01em] shadow-none focus-visible:border-foreground/45 focus-visible:ring-0 md:text-base dark:bg-transparent"
             />
             <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
               <p>Return parks it. It stays hidden.</p>
@@ -424,7 +427,12 @@ export function MarginWidget() {
                   </span>
                 )}
               </p>
-              <Button type="button" variant="outline" className="h-10 px-4" onClick={endSitting}>
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-9 px-2 font-normal hover:bg-transparent hover:text-foreground"
+                onClick={endSitting}
+              >
                 End sitting
               </Button>
             </div>
@@ -434,7 +442,9 @@ export function MarginWidget() {
         {phase === "sealed" && active ? (
           <div>
             <p className="text-sm text-muted-foreground">Sitting closed</p>
-            <p className="mt-2 text-3xl font-medium tabular-nums tracking-[0.08em]">{formatElapsed(elapsed)}</p>
+            <p className="mt-2 text-[2.75rem] leading-none font-medium tabular-nums tracking-[-0.045em]">
+              {formatElapsed(elapsed)}
+            </p>
             <p className="mt-4 text-xl font-medium leading-snug tracking-[0.04em]">
               {active.thoughts.length === 0
                 ? "Nothing was held."
@@ -446,7 +456,12 @@ export function MarginWidget() {
               <Button type="button" className="h-11" ref={revealRef} onClick={onReveal}>
                 Reveal
               </Button>
-              <Button type="button" variant="ghost" onClick={onResume}>
+              <Button
+                type="button"
+                variant="ghost"
+                className="font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
+                onClick={onResume}
+              >
                 Resume
               </Button>
             </div>
@@ -515,7 +530,7 @@ function Reveal({
       <div className="mb-5 flex items-end justify-between gap-3">
         <div>
           <p className="text-sm text-muted-foreground">After</p>
-          <p className="mt-1 text-[1.65rem] font-medium leading-none tracking-[0.04em]">{length}</p>
+          <p className="mt-1 text-[1.65rem] font-medium leading-none tracking-[-0.02em]">{length}</p>
         </div>
         <p className="pb-1 text-sm text-muted-foreground tabular-nums">
           {formatWhen(sitting.startedAt)}
@@ -558,10 +573,20 @@ function Reveal({
         </div>
       ) : (
         <div className="mt-6 flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" className="h-10" onClick={onCopy}>
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-10 px-2 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
+            onClick={onCopy}
+          >
             {copied ? "Copied" : "Copy"}
           </Button>
-          <Button type="button" variant="ghost" className="h-10" onClick={onAskClear}>
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-10 px-2 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
+            onClick={onAskClear}
+          >
             Discard
           </Button>
           <Button type="button" className="ml-auto h-10" onClick={onDone}>
