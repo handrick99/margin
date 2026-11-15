@@ -50,38 +50,69 @@ function serveBundledApp() {
 
 const boundsPath = () => path.join(app.getPath("userData"), "window.json")
 
-function readBounds() {
+function readState() {
   try {
     const saved = JSON.parse(fs.readFileSync(boundsPath(), "utf8"))
-    if (Number.isFinite(saved.width) && Number.isFinite(saved.height)) return saved
+    if (Number.isFinite(saved.width) && Number.isFinite(saved.height)) {
+      return {
+        width: saved.width,
+        height: saved.height,
+        x: Number.isFinite(saved.x) ? saved.x : undefined,
+        y: Number.isFinite(saved.y) ? saved.y : undefined,
+        fullscreen: saved.fullscreen !== false,
+      }
+    }
   } catch {
     // First launch has no saved window.
   }
-  return { width: 420, height: 520, x: undefined, y: undefined }
+  return { width: 420, height: 520, x: undefined, y: undefined, fullscreen: true }
 }
 
-function saveBounds(win) {
+function saveState(win) {
   if (win.isDestroyed()) return
+  let previous = { width: 420, height: 520 }
+  try {
+    previous = JSON.parse(fs.readFileSync(boundsPath(), "utf8"))
+  } catch {
+    // Keep the default window size for the next time fullscreen exits.
+  }
+  const fullscreen = win.isFullScreen()
+  const bounds = fullscreen
+    ? {
+        width: Number.isFinite(previous.width) ? previous.width : 420,
+        height: Number.isFinite(previous.height) ? previous.height : 520,
+        x: Number.isFinite(previous.x) ? previous.x : undefined,
+        y: Number.isFinite(previous.y) ? previous.y : undefined,
+      }
+    : win.getBounds()
   fs.mkdirSync(path.dirname(boundsPath()), { recursive: true })
-  fs.writeFileSync(boundsPath(), JSON.stringify(win.getBounds()))
+  fs.writeFileSync(boundsPath(), JSON.stringify({ ...bounds, fullscreen }))
+}
+
+function applyOverlay(win, fullscreen) {
+  win.setAlwaysOnTop(!fullscreen, "floating")
+  if (process.platform === "darwin") {
+    win.setVisibleOnAllWorkspaces(!fullscreen, { visibleOnFullScreen: true })
+  }
 }
 
 let win = null
 
 function createWindow() {
-  const bounds = readBounds()
+  const state = readState()
   win = new BrowserWindow({
-    width: bounds.width,
-    height: bounds.height,
-    x: bounds.x,
-    y: bounds.y,
+    width: state.width,
+    height: state.height,
+    x: state.x,
+    y: state.y,
     minWidth: 360,
     minHeight: 460,
     show: false,
     frame: false,
+    fullscreen: state.fullscreen,
     backgroundColor: "#141414",
     autoHideMenuBar: true,
-    alwaysOnTop: true,
+    alwaysOnTop: !state.fullscreen,
     title: "Margin",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -92,17 +123,36 @@ function createWindow() {
   })
 
   win.removeMenu()
-  if (process.platform === "darwin") {
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  }
+  applyOverlay(win, state.fullscreen)
   win.loadURL(`${devUrl || "app://margin/"}?desktop=1`)
   win.once("ready-to-show", () => win?.show())
-  win.on("move", () => win && saveBounds(win))
-  win.on("resize", () => win && saveBounds(win))
+  win.on("move", () => {
+    if (win && !win.isFullScreen()) saveState(win)
+  })
+  win.on("resize", () => {
+    if (win && !win.isFullScreen()) saveState(win)
+  })
+  win.on("enter-full-screen", () => {
+    if (!win) return
+    applyOverlay(win, true)
+    saveState(win)
+    win.webContents.send("fullscreen-changed", true)
+  })
+  win.on("leave-full-screen", () => {
+    if (!win) return
+    applyOverlay(win, false)
+    saveState(win)
+    win.webContents.send("fullscreen-changed", false)
+  })
 }
 
 ipcMain.on("window-close", () => win?.close())
 ipcMain.on("window-minimize", () => win?.minimize())
+ipcMain.on("window-fullscreen", () => {
+  if (!win) return
+  win.setFullScreen(!win.isFullScreen())
+})
+ipcMain.handle("window-is-fullscreen", () => win?.isFullScreen() ?? false)
 ipcMain.on("window-background", (_event, color) => {
   if (typeof color === "string" && /^#[0-9a-fA-F]{6}$/.test(color)) {
     win?.setBackgroundColor(color)

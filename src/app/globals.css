@@ -221,6 +221,16 @@ html.desktop .margin-widget {
   overflow: auto;
 }
 
+html.desktop.fullscreen .desk {
+  padding: 0;
+}
+
+html.desktop.fullscreen .margin-widget {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 html.desktop .desktop-only {
   display: inline-flex !important;
 }

@@ -60,6 +60,7 @@ export function MarginWidget() {
   const [copied, setCopied] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
   const [viewing, setViewing] = useState<Sitting | null>(null)
+  const [fullscreen, setFullscreen] = useState(false)
   const draftRef = useRef("")
   const storeRef = useRef<Store | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -68,6 +69,26 @@ export function MarginWidget() {
   storeRef.current = store
   const phase = phaseOf(store, viewing)
   const openSitting = viewing ?? (store?.active?.revealedAt ? store.active : null)
+
+  useEffect(() => {
+    const margin = window.margin
+    if (!margin?.isFullscreen) return
+    let cancelled = false
+    margin.isFullscreen().then((value) => {
+      if (!cancelled) setFullscreen(value)
+    })
+    const unsubscribe = margin.onFullscreen((value) => {
+      if (!cancelled) setFullscreen(value)
+    })
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("fullscreen", fullscreen)
+  }, [fullscreen])
 
   useEffect(() => {
     const loaded = loadStore()
@@ -256,6 +277,15 @@ export function MarginWidget() {
                 {store.theme === "ink" ? "Paper" : "Ink"}
               </Button>
             ) : null}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="desktop-only text-muted-foreground"
+              onClick={() => window.margin?.toggleFullscreen()}
+            >
+              {fullscreen ? "Window" : "Full"}
+            </Button>
             <Button
               type="button"
               variant="ghost"
