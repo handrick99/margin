@@ -84,6 +84,17 @@ function saveState() {
   fs.writeFileSync(boundsPath(), JSON.stringify({ ...bounds, fullscreen: filled }))
 }
 
+function keepInDock() {
+  if (process.platform !== "darwin" || !app.dock) return
+  const show = () => {
+    if (!app.dock) return
+    app.setActivationPolicy("regular")
+    app.dock.show()
+  }
+  show()
+  setTimeout(show, 0)
+}
+
 function setFilled(next) {
   if (!win || next === filled) return
   if (next) windowed = win.getBounds()
@@ -96,12 +107,14 @@ function setFilled(next) {
     if (process.platform === "darwin") win.setSimpleFullScreen(true)
   } else {
     if (process.platform === "darwin") win.setSimpleFullScreen(false)
+    win.setMovable(true)
     win.setAlwaysOnTop(true, "floating")
     if (process.platform === "darwin") {
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
     }
     if (windowed) win.setBounds(windowed)
   }
+  keepInDock()
   saveState()
   if (!win.webContents.isDestroyed()) win.webContents.send("fullscreen-changed", filled)
 }
@@ -121,6 +134,9 @@ function createWindow() {
     backgroundColor: "#141414",
     autoHideMenuBar: true,
     alwaysOnTop: true,
+    movable: true,
+    fullscreenable: true,
+    skipTaskbar: false,
     title: "Margin",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -133,12 +149,15 @@ function createWindow() {
   win.removeMenu()
   if (process.platform === "darwin") {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+    keepInDock()
   }
   win.loadURL(`${devUrl || "app://margin/"}?desktop=1`)
   win.once("ready-to-show", () => {
     if (!win) return
     win.show()
     if (state.fullscreen) setFilled(true)
+    else win.setMovable(true)
+    keepInDock()
     settled = true
   })
   win.on("move", () => {
@@ -178,7 +197,7 @@ if (!hasLock) {
     createWindow()
   })
   app.on("before-quit", () => {
-    if (process.platform === "darwin") app.dock.show()
+    keepInDock()
   })
   app.on("window-all-closed", () => app.quit())
 }

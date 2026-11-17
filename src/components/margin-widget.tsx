@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -61,6 +61,7 @@ export function MarginWidget() {
   const [confirmClear, setConfirmClear] = useState(false)
   const [viewing, setViewing] = useState<Sitting | null>(null)
   const [fullscreen, setFullscreen] = useState(false)
+  const [desktop, setDesktop] = useState(false)
   const draftRef = useRef("")
   const storeRef = useRef<Store | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -69,6 +70,12 @@ export function MarginWidget() {
   storeRef.current = store
   const phase = phaseOf(store, viewing)
   const openSitting = viewing ?? (store?.active?.revealedAt ? store.active : null)
+
+  useLayoutEffect(() => {
+    const on = window.location.search.includes("desktop=1") || typeof window.margin !== "undefined"
+    document.documentElement.classList.toggle("desktop", on)
+    setDesktop(on)
+  }, [])
 
   useEffect(() => {
     const margin = window.margin
@@ -255,12 +262,12 @@ export function MarginWidget() {
   return (
     <main className="desk flex min-h-dvh items-start justify-center px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-10 sm:items-center">
       <section
-        className="margin-widget w-[min(100%,24rem)] px-5 py-5 sm:px-6 sm:py-6"
+        className="margin-widget flex w-[min(100%,24rem)] flex-col px-5 pb-5 sm:px-6 sm:pb-6"
         aria-labelledby="margin-title"
         aria-busy={phase === "loading"}
         data-phase={phase}
       >
-        <header className="drag mb-8 flex items-center justify-between gap-3">
+        <header className="drag -mx-5 mb-8 flex items-center justify-between gap-3 px-5 pt-5 sm:-mx-6 sm:px-6 sm:pt-6">
           <h1 id="margin-title" className="text-[11px] font-medium tracking-[0.28em]">
             MARGIN
           </h1>
@@ -277,27 +284,32 @@ export function MarginWidget() {
                 {store.theme === "ink" ? "Paper" : "Ink"}
               </Button>
             ) : null}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="desktop-only h-7 px-1.5 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
-              onClick={() => window.margin?.toggleFullscreen()}
-            >
-              {fullscreen ? "Window" : "Full"}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="desktop-only h-7 px-1.5 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
-              onClick={() => window.margin?.close()}
-            >
-              Close
-            </Button>
+            {desktop ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-1.5 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
+                onClick={() => window.margin?.toggleFullscreen()}
+              >
+                {fullscreen ? "Window" : "Full screen"}
+              </Button>
+            ) : null}
+            {desktop ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-1.5 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
+                onClick={() => window.margin?.close()}
+              >
+                Close
+              </Button>
+            ) : null}
           </div>
         </header>
 
+        <div className="margin-body">
         {phase === "loading" ? <Loading /> : null}
 
         {phase === "idle" && store ? (
@@ -486,6 +498,7 @@ export function MarginWidget() {
         {!persistent && phase !== "loading" ? (
           <p className="mt-5 text-xs text-muted-foreground">This sitting stays in this tab only.</p>
         ) : null}
+        </div>
       </section>
     </main>
   )
