@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, protocol } = require("electron")
+const { app, BrowserWindow, ipcMain, protocol, screen } = require("electron")
 const fs = require("fs")
 const path = require("path")
 
@@ -50,22 +50,43 @@ function serveBundledApp() {
 
 const boundsPath = () => path.join(app.getPath("userData"), "window.json")
 
+const defaultWindow = { width: 420, height: 560 }
+
+function fillsDisplay(bounds) {
+  if (!bounds || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) return false
+  const display = screen.getDisplayMatching({
+    x: Number.isFinite(bounds.x) ? bounds.x : 0,
+    y: Number.isFinite(bounds.y) ? bounds.y : 0,
+    width: bounds.width,
+    height: bounds.height,
+  })
+  const scale = display.scaleFactor || 1
+  const edges = [display.bounds, display.workArea].flatMap((edge) => [
+    [edge.width, edge.height],
+    [edge.width / scale, edge.height / scale],
+    [edge.width * scale, edge.height * scale],
+  ])
+  return edges.some(([width, height]) => Math.abs(bounds.width - width) < 96 && Math.abs(bounds.height - height) < 96)
+}
+
 function readState() {
   try {
     const saved = JSON.parse(fs.readFileSync(boundsPath(), "utf8"))
-    if (Number.isFinite(saved.width) && Number.isFinite(saved.height)) {
-      return {
-        width: saved.width,
-        height: saved.height,
-        x: Number.isFinite(saved.x) ? saved.x : undefined,
-        y: Number.isFinite(saved.y) ? saved.y : undefined,
-        fullscreen: saved.fullscreen === true,
-      }
+    const candidate = {
+      width: saved.width,
+      height: saved.height,
+      x: Number.isFinite(saved.x) ? saved.x : undefined,
+      y: Number.isFinite(saved.y) ? saved.y : undefined,
+      fullscreen: saved.fullscreen === true,
     }
+    if (Number.isFinite(candidate.width) && Number.isFinite(candidate.height) && !fillsDisplay(candidate)) {
+      return candidate
+    }
+    if (candidate.fullscreen) return { ...defaultWindow, fullscreen: true }
   } catch {
     // First launch has no saved window.
   }
-  return { width: 420, height: 560, x: undefined, y: undefined, fullscreen: false }
+  return { ...defaultWindow, x: undefined, y: undefined, fullscreen: false }
 }
 
 let win = null
@@ -100,43 +121,79 @@ function notifyFullscreen() {
   win.webContents.send("fullscreen-changed", filled)
 }
 
-function applyWindowed() {
+let frameTimer = null
+
+function copyBounds(bounds) {
+  if (!bounds || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) return null
+  const next = { width: Math.round(bounds.width), height: Math.round(bounds.height) }
+  if (Number.isFinite(bounds.x)) next.x = Math.round(bounds.x)
+  if (Number.isFinite(bounds.y)) next.y = Math.round(bounds.y)
+  return next
+}
+
+function placeWindow(bounds, floating) {
   if (!win || win.isDestroyed()) return
-  win.setMovable(true)
-  win.setAlwaysOnTop(true, "floating")
-  if (process.platform === "darwin") {
-    win.setSimpleFullScreen(false)
-    win.setVisibleOnAllWorkspaces(false)
+  const frame = copyBounds(bounds)
+  try {
+    if (floating) {
+      if (win.isFullScreen()) win.setFullScreen(false)
+      if (process.platform === "darwin" && win.isSimpleFullScreen()) win.setSimpleFullScreen(false)
+      if (win.isMaximized()) win.unmaximize()
+    }
+    win.setResizable(true)
+    win.setMovable(true)
+    win.setHasShadow(floating)
+    if (floating) win.setAlwaysOnTop(true, "floating")
+    else win.setAlwaysOnTop(false)
+  } catch {
+    // Keep going so the size still changes.
+  }
+  if (!frame) return
+  try {
+    win.setBounds(frame)
+  } catch {
+    // A rejected window change should leave the app open.
+  }
+}
+
+function queueFrame(bounds, floating) {
+  if (frameTimer) clearTimeout(frameTimer)
+  frameTimer = setTimeout(() => {
+    frameTimer = null
+    placeWindow(bounds, floating)
+    saveState()
+    notifyFullscreen()
+    keepInDock()
+  }, 0)
+}
+
+function applyWindowed() {
+  placeWindow(null, true)
+}
+
+function rememberedWindow() {
+  const saved = copyBounds(windowed)
+  if (saved && !fillsDisplay(saved)) return saved
+  const area = screen.getDisplayMatching(win.getBounds()).workArea
+  return {
+    width: defaultWindow.width,
+    height: defaultWindow.height,
+    x: Math.round(area.x + (area.width - defaultWindow.width) / 2),
+    y: Math.round(area.y + (area.height - defaultWindow.height) / 2),
   }
 }
 
 function setFilled(next) {
   if (!win || win.isDestroyed() || next === filled) return
   if (next) {
-    windowed = win.getBounds()
+    const current = win.getBounds()
+    if (!fillsDisplay(current)) windowed = copyBounds(current)
     filled = true
-    win.setAlwaysOnTop(false)
-    if (process.platform === "darwin") {
-      win.setVisibleOnAllWorkspaces(false)
-      win.setFullScreen(false)
-      win.setSimpleFullScreen(true)
-    } else {
-      win.setFullScreen(true)
-    }
-  } else {
-    filled = false
-    if (process.platform === "darwin") {
-      win.setSimpleFullScreen(false)
-      win.setFullScreen(false)
-    } else {
-      win.setFullScreen(false)
-    }
-    applyWindowed()
-    if (windowed) win.setBounds(windowed)
+    queueFrame(screen.getDisplayMatching(current).bounds, false)
+    return
   }
-  saveState()
-  notifyFullscreen()
-  keepInDock()
+  filled = false
+  queueFrame(rememberedWindow(), true)
 }
 
 function createWindow() {
@@ -152,6 +209,8 @@ function createWindow() {
     show: false,
     frame: false,
     backgroundColor: "#141414",
+    hasShadow: true,
+    resizable: true,
     autoHideMenuBar: true,
     alwaysOnTop: true,
     movable: true,
@@ -169,44 +228,39 @@ function createWindow() {
   win.removeMenu()
   applyWindowed()
   keepInDock()
-  win.loadURL(`${devUrl || "app://margin/"}?desktop=1`)
+  const showWindow = () => {
+    if (!win || win.isDestroyed() || filled) return
+    placeWindow(rememberedWindow(), true)
+    saveState()
+    notifyFullscreen()
+  }
   win.on("enter-full-screen", () => {
-    filled = true
-    saveState()
-    notifyFullscreen()
-    keepInDock()
+    if (!filled) setTimeout(showWindow, 50)
   })
-  win.on("leave-full-screen", () => {
-    if (!filled) return
-    filled = false
-    applyWindowed()
-    if (windowed) win.setBounds(windowed)
-    saveState()
-    notifyFullscreen()
+  win.once("ready-to-show", () => {
+    if (!win) return
+    win.show()
+    showWindow()
+    setTimeout(showWindow, 150)
+    setTimeout(showWindow, 700)
     keepInDock()
+    settled = true
   })
+  win.loadURL(`${devUrl || "app://margin/"}?desktop=1`)
   win.webContents.on("before-input-event", (_event, input) => {
     if (input.type === "keyDown" && input.key === "Escape" && (filled || win?.isFullScreen())) {
       setFilled(false)
     }
   })
-  win.once("ready-to-show", () => {
-    if (!win) return
-    win.show()
-    if (state.fullscreen) setFilled(true)
-    keepInDock()
-    settled = true
-  })
-  win.on("move", () => {
+  const remember = () => {
     if (!settled || !win || filled || win.isFullScreen()) return
-    windowed = win.getBounds()
+    const bounds = win.getBounds()
+    if (fillsDisplay(bounds)) return
+    windowed = copyBounds(bounds)
     saveState()
-  })
-  win.on("resize", () => {
-    if (!settled || !win || filled || win.isFullScreen()) return
-    windowed = win.getBounds()
-    saveState()
-  })
+  }
+  win.on("move", remember)
+  win.on("resize", remember)
 }
 
 ipcMain.on("window-close", () => win?.close())
