@@ -96,6 +96,7 @@ export function MarginWidget() {
   const beginRef = useRef<() => void>(() => {})
   const endRef = useRef<() => void>(() => {})
   const resumeRef = useRef<() => void>(() => {})
+  const copyRef = useRef<() => void>(() => {})
   const audioRef = useRef<AudioContext | null>(null)
 
   storeRef.current = store
@@ -208,6 +209,17 @@ export function MarginWidget() {
         if (!typing) {
           event.preventDefault()
           window.margin?.toggleFullscreen()
+        }
+        return
+      }
+      if ((event.key === "c" || event.key === "C") && !event.repeat && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const target = event.target
+        const typing =
+          target instanceof HTMLElement &&
+          (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+        if (!typing && phaseRef.current === "open") {
+          event.preventDefault()
+          copyRef.current()
         }
         return
       }
@@ -378,6 +390,10 @@ export function MarginWidget() {
     } catch {
       setNotice("Couldn’t copy. Select the thoughts instead.")
     }
+  }
+
+  copyRef.current = () => {
+    if (openSitting) void copyAll(openSitting)
   }
 
   const active = store?.active ?? null
