@@ -200,6 +200,17 @@ export function MarginWidget() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if ((event.key === "f" || event.key === "F") && !event.repeat && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const target = event.target
+        const typing =
+          target instanceof HTMLElement &&
+          (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+        if (!typing) {
+          event.preventDefault()
+          window.margin?.toggleFullscreen()
+        }
+        return
+      }
       if (event.code !== "Space" || event.repeat || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
       const screen = phaseRef.current
       if (screen !== "idle" && screen !== "live" && screen !== "sealed") return

@@ -111,21 +111,32 @@ function applyWindowed() {
 }
 
 function setFilled(next) {
-  if (!win || win.isDestroyed()) return
+  if (!win || win.isDestroyed() || next === filled) return
   if (next) {
-    if (filled || win.isFullScreen()) return
     windowed = win.getBounds()
+    filled = true
     win.setAlwaysOnTop(false)
     if (process.platform === "darwin") {
-      win.setSimpleFullScreen(false)
       win.setVisibleOnAllWorkspaces(false)
+      win.setFullScreen(false)
+      win.setSimpleFullScreen(true)
+    } else {
+      win.setFullScreen(true)
     }
-    win.setFullScreen(true)
-    return
+  } else {
+    filled = false
+    if (process.platform === "darwin") {
+      win.setSimpleFullScreen(false)
+      win.setFullScreen(false)
+    } else {
+      win.setFullScreen(false)
+    }
+    applyWindowed()
+    if (windowed) win.setBounds(windowed)
   }
-  if (!filled && !win.isFullScreen()) return
-  win.setFullScreen(false)
-  if (process.platform === "darwin") win.setSimpleFullScreen(false)
+  saveState()
+  notifyFullscreen()
+  keepInDock()
 }
 
 function createWindow() {
@@ -166,6 +177,7 @@ function createWindow() {
     keepInDock()
   })
   win.on("leave-full-screen", () => {
+    if (!filled) return
     filled = false
     applyWindowed()
     if (windowed) win.setBounds(windowed)
