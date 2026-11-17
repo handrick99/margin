@@ -4,12 +4,31 @@ export type Thought = {
   offsetMs: number
 }
 
+export type PomoPhase = "focus" | "short" | "long"
+
+export type PomodoroSettings = {
+  focus: number
+  shortBreak: number
+  longBreak: number
+  rounds: number
+}
+
+export type PomodoroRun = {
+  phase: PomoPhase
+  phaseEndsAt: number
+  phaseMinutes: number
+  completedFocuses: number
+}
+
+export type SittingPlan = "25" | "50" | "open" | "pomo"
+
 export type Sitting = {
   id: string
   startedAt: number
   endedAt: number | null
   revealedAt: number | null
   targetMinutes: number | null
+  pomodoro: PomodoroRun | null
   thoughts: Thought[]
   draft: string
 }
@@ -18,20 +37,86 @@ export type Theme = "ink" | "paper"
 
 export type Store = {
   theme: Theme
+  plan: SittingPlan
+  pomodoro: PomodoroSettings
   active: Sitting | null
   archive: Sitting[]
+}
+
+export const DEFAULT_POMODORO: PomodoroSettings = {
+  focus: 25,
+  shortBreak: 5,
+  longBreak: 15,
+  rounds: 4,
+}
+
+const POMO_LIMITS: Record<keyof PomodoroSettings, [number, number]> = {
+  focus: [1, 180],
+  shortBreak: [1, 60],
+  longBreak: [1, 120],
+  rounds: [1, 12],
 }
 
 export const MAX_THOUGHT = 4000
 export const MAX_ARCHIVE = 40
 
-export function createSitting(targetMinutes: number | null, now: number): Sitting {
+export function clampPomodoro(value: unknown): PomodoroSettings {
+  const source = isRecord(value) ? value : {}
+  const pick = (key: keyof PomodoroSettings) => {
+    const [min, max] = POMO_LIMITS[key]
+    const raw = source[key]
+    const parsed = typeof raw === "number" && Number.isFinite(raw) ? Math.round(raw) : DEFAULT_POMODORO[key]
+    return Math.min(max, Math.max(min, parsed))
+  }
+  return {
+    focus: pick("focus"),
+    shortBreak: pick("shortBreak"),
+    longBreak: pick("longBreak"),
+    rounds: pick("rounds"),
+  }
+}
+
+function phaseMinutes(phase: PomoPhase, settings: PomodoroSettings) {
+  if (phase === "focus") return settings.focus
+  if (phase === "long") return settings.longBreak
+  return settings.shortBreak
+}
+
+export function startPomodoro(settings: PomodoroSettings, now: number): PomodoroRun {
+  const minutes = settings.focus
+  return {
+    phase: "focus",
+    phaseMinutes: minutes,
+    phaseEndsAt: now + minutes * 60_000,
+    completedFocuses: 0,
+  }
+}
+
+export function advancePomodoro(run: PomodoroRun, settings: PomodoroSettings, now: number): PomodoroRun {
+  if (run.phase === "focus") {
+    const completedFocuses = run.completedFocuses + 1
+    const phase: PomoPhase = completedFocuses % settings.rounds === 0 ? "long" : "short"
+    const minutes = phaseMinutes(phase, settings)
+    return { phase, phaseMinutes: minutes, phaseEndsAt: now + minutes * 60_000, completedFocuses }
+  }
+  const minutes = settings.focus
+  return {
+    phase: "focus",
+    phaseMinutes: minutes,
+    phaseEndsAt: now + minutes * 60_000,
+    completedFocuses: run.completedFocuses,
+  }
+}
+
+export function createSitting(targetMinutes: number | null, now: number, pomo?: PomodoroSettings): Sitting {
+  const settings = pomo ? clampPomodoro(pomo) : null
   return {
     id: crypto.randomUUID(),
     startedAt: now,
     endedAt: null,
     revealedAt: null,
-    targetMinutes,
+    targetMinutes: settings ? null : targetMinutes,
+    pomodoro: settings ? startPomodoro(settings, now) : null,
     thoughts: [],
     draft: "",
   }
@@ -120,6 +205,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
 }
 
+function sanitizePomodoro(value: unknown): PomodoroRun | null {
+  if (!isRecord(value)) return null
+  if (value.phase !== "focus" && value.phase !== "short" && value.phase !== "long") return null
+  if (typeof value.phaseEndsAt !== "number" || !Number.isFinite(value.phaseEndsAt)) return null
+  if (typeof value.phaseMinutes !== "number" || !Number.isFinite(value.phaseMinutes)) return null
+  if (typeof value.completedFocuses !== "number" || !Number.isFinite(value.completedFocuses)) return null
+  return {
+    phase: value.phase,
+    phaseEndsAt: value.phaseEndsAt,
+    phaseMinutes: Math.max(1, Math.round(value.phaseMinutes)),
+    completedFocuses: Math.max(0, Math.round(value.completedFocuses)),
+  }
+}
+
+const PLANS: SittingPlan[] = ["25", "50", "open", "pomo"]
+
 function sanitizeThought(value: unknown): Thought | null {
   if (!isRecord(value)) return null
   if (typeof value.id !== "string" || typeof value.text !== "string") return null
@@ -142,14 +243,18 @@ export function sanitizeSitting(value: unknown): Sitting | null {
     endedAt: typeof value.endedAt === "number" ? value.endedAt : null,
     revealedAt: typeof value.revealedAt === "number" ? value.revealedAt : null,
     targetMinutes: typeof value.targetMinutes === "number" ? value.targetMinutes : null,
+    pomodoro: sanitizePomodoro(value.pomodoro),
     thoughts,
     draft: typeof value.draft === "string" ? value.draft : "",
   }
 }
 
 export function sanitizeStore(value: unknown, theme: Theme): Store {
-  if (!isRecord(value)) return { theme, active: null, archive: [] }
+  if (!isRecord(value)) {
+    return { theme, plan: "25", pomodoro: DEFAULT_POMODORO, active: null, archive: [] }
+  }
   const storedTheme: Theme = value.theme === "paper" || value.theme === "ink" ? value.theme : theme
+  const plan: SittingPlan = PLANS.includes(value.plan as SittingPlan) ? (value.plan as SittingPlan) : "25"
   const archive = Array.isArray(value.archive)
     ? value.archive
         .flatMap((sitting) => {
@@ -160,6 +265,8 @@ export function sanitizeStore(value: unknown, theme: Theme): Store {
     : []
   return {
     theme: storedTheme,
+    plan,
+    pomodoro: clampPomodoro(value.pomodoro),
     active: sanitizeSitting(value.active),
     archive,
   }

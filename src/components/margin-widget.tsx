@@ -4,7 +4,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
+  advancePomodoro,
   archiveSitting,
+  clampPomodoro,
   createSitting,
   formatElapsed,
   formatLength,
@@ -15,16 +17,26 @@ import {
   seal,
   sittingLength,
   transcript,
+  type PomodoroSettings,
   type Sitting,
+  type SittingPlan,
   type Store,
   type Theme,
 } from "@/lib/sitting"
 import { loadStore, saveStore } from "@/lib/storage"
 
-const LENGTHS: { label: string; minutes: number | null }[] = [
-  { label: "25 min", minutes: 25 },
-  { label: "50 min", minutes: 50 },
-  { label: "Open", minutes: null },
+const PLANS: { id: SittingPlan; label: string }[] = [
+  { id: "25", label: "25 min" },
+  { id: "50", label: "50 min" },
+  { id: "open", label: "Open" },
+  { id: "pomo", label: "Pomo" },
+]
+
+const POMO_FIELDS: { key: keyof PomodoroSettings; label: string; suffix: string }[] = [
+  { key: "focus", label: "Focus", suffix: "min" },
+  { key: "shortBreak", label: "Break", suffix: "min" },
+  { key: "longBreak", label: "Long", suffix: "min" },
+  { key: "rounds", label: "Long every", suffix: "" },
 ]
 
 type Phase = "loading" | "idle" | "live" | "sealed" | "open"
@@ -42,6 +54,23 @@ function themeColor(theme: Theme) {
   return theme === "ink" ? "#141414" : "#e8e8e6"
 }
 
+function chime(ctx: AudioContext | null) {
+  if (!ctx) return
+  const now = ctx.currentTime
+  const gain = ctx.createGain()
+  gain.gain.setValueAtTime(0.0001, now)
+  gain.gain.exponentialRampToValueAtTime(0.04, now + 0.02)
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.45)
+  gain.connect(ctx.destination)
+  const tone = ctx.createOscillator()
+  tone.type = "sine"
+  tone.frequency.setValueAtTime(523.25, now)
+  tone.frequency.setValueAtTime(659.25, now + 0.12)
+  tone.connect(gain)
+  tone.start(now)
+  tone.stop(now + 0.46)
+}
+
 function applyTheme(theme: Theme) {
   document.documentElement.classList.toggle("dark", theme === "ink")
   const color = themeColor(theme)
@@ -53,7 +82,6 @@ export function MarginWidget() {
   const [store, setStore] = useState<Store | null>(null)
   const [persistent, setPersistent] = useState(true)
   const [draft, setDraft] = useState("")
-  const [target, setTarget] = useState<number | null>(25)
   const [now, setNow] = useState(() => Date.now())
   const [notice, setNotice] = useState<string | null>(null)
   const [justHeld, setJustHeld] = useState(false)
@@ -66,6 +94,7 @@ export function MarginWidget() {
   const storeRef = useRef<Store | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const revealRef = useRef<HTMLButtonElement>(null)
+  const audioRef = useRef<AudioContext | null>(null)
 
   storeRef.current = store
   const phase = phaseOf(store, viewing)
@@ -107,8 +136,25 @@ export function MarginWidget() {
   }, [])
 
   useEffect(() => {
-    if (phase !== "live") return
-    const tick = () => setNow(Date.now())
+    if (phase !== "live") {
+      document.title = "Margin"
+      return
+    }
+    const tick = () => {
+      const time = Date.now()
+      setNow(time)
+      const current = storeRef.current
+      const sitting = current?.active
+      const run = sitting?.pomodoro
+      if (!current || !sitting || sitting.endedAt || !run || time < run.phaseEndsAt) return
+      const nextRun = advancePomodoro(run, current.pomodoro, time)
+      chime(audioRef.current)
+      const next = { ...current, active: { ...sitting, pomodoro: nextRun } }
+      storeRef.current = next
+      setStore(next)
+      setPersistent(saveStore(next))
+    }
+    tick()
     const id = window.setInterval(tick, 1000)
     const onVisible = () => {
       if (document.visibilityState === "visible") tick()
@@ -117,8 +163,17 @@ export function MarginWidget() {
     return () => {
       window.clearInterval(id)
       document.removeEventListener("visibilitychange", onVisible)
+      document.title = "Margin"
     }
   }, [phase])
+
+  useEffect(() => {
+    const sitting = store?.active
+    const cycle = sitting?.pomodoro
+    if (phase !== "live" || !sitting || sitting.endedAt || !cycle) return
+    const label = cycle.phase === "focus" ? "Focus" : "Break"
+    document.title = `${formatElapsed(Math.max(0, cycle.phaseEndsAt - now))} ${label} · Margin`
+  }, [phase, store, now])
 
   useEffect(() => {
     if (phase === "live") inputRef.current?.focus()
@@ -158,14 +213,45 @@ export function MarginWidget() {
     persist({ ...store, theme })
   }
 
+  function ensureAudio() {
+    const Ctx = window.AudioContext
+    if (!Ctx) return null
+    if (!audioRef.current) audioRef.current = new Ctx()
+    void audioRef.current.resume()
+    return audioRef.current
+  }
+
   function begin() {
     if (!store) return
+    ensureAudio()
     setViewing(null)
     setNotice(null)
     setConfirmClear(false)
     draftRef.current = ""
     setDraft("")
-    persist({ ...store, active: createSitting(target, Date.now()) })
+    const minutes = store.plan === "50" ? 50 : store.plan === "25" ? 25 : null
+    persist({
+      ...store,
+      active: createSitting(minutes, Date.now(), store.plan === "pomo" ? store.pomodoro : undefined),
+    })
+  }
+
+  function choosePlan(plan: SittingPlan) {
+    if (!store || store.plan === plan) return
+    persist({ ...store, plan })
+  }
+
+  function setPomo(key: keyof PomodoroSettings, raw: number) {
+    if (!store) return
+    persist({ ...store, pomodoro: clampPomodoro({ ...store.pomodoro, [key]: raw }) })
+  }
+
+  function skipPhase() {
+    const current = storeRef.current
+    const sitting = current?.active
+    if (!current || !sitting?.pomodoro || sitting.endedAt) return
+    const nextRun = advancePomodoro(sitting.pomodoro, current.pomodoro, Date.now())
+    persist({ ...current, active: { ...sitting, pomodoro: nextRun } })
   }
 
   function parkCurrent() {
@@ -255,9 +341,22 @@ export function MarginWidget() {
 
   const active = store?.active ?? null
   const elapsed = active ? sittingLength(active, now) : 0
-  const targetMs = active?.targetMinutes ? active.targetMinutes * 60_000 : null
+  const run = active?.pomodoro ?? null
+  const targetMs = !run && active?.targetMinutes ? active.targetMinutes * 60_000 : null
   const blockDone = phase === "live" && targetMs !== null && elapsed >= targetMs
-  const progress = targetMs ? Math.min(100, (elapsed / targetMs) * 100) : 0
+  const remaining = run ? Math.max(0, run.phaseEndsAt - now) : 0
+  const pomoTotal = run ? run.phaseMinutes * 60_000 : 0
+  const progress = run
+    ? pomoTotal ? Math.min(100, ((pomoTotal - remaining) / pomoTotal) * 100) : 0
+    : targetMs ? Math.min(100, (elapsed / targetMs) * 100) : 0
+  const phaseLabel = run?.phase === "focus" ? "Focus" : run?.phase === "long" ? "Long break" : run ? "Break" : blockDone ? "Block finished" : "Studying"
+  const phaseAside = run
+    ? run.phase === "focus"
+      ? `${(run.completedFocuses % (store?.pomodoro.rounds || 4)) + 1} of ${store?.pomodoro.rounds || 4}`
+      : "then focus"
+    : active?.targetMinutes
+      ? `${active.targetMinutes} min`
+      : "Open"
 
   return (
     <main className="desk flex min-h-dvh items-start justify-center px-4 pt-[max(1.25rem,env(safe-area-inset-top))] pb-10 sm:items-center">
@@ -322,15 +421,15 @@ export function MarginWidget() {
                 Thoughts stay closed until you end the sitting and ask to see them.
               </p>
             </div>
-            <div className="flex items-center gap-5" role="group" aria-label="Sitting length">
-              {LENGTHS.map((option) => {
-                const selected = target === option.minutes
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2" role="group" aria-label="Sitting length">
+              {PLANS.map((option) => {
+                const selected = store.plan === option.id
                 return (
                   <button
-                    key={option.label}
+                    key={option.id}
                     type="button"
                     aria-pressed={selected}
-                    onClick={() => setTarget(option.minutes)}
+                    onClick={() => choosePlan(option.id)}
                     className={`rounded-sm py-1 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 ${
                       selected ? "text-foreground" : "text-muted-foreground hover:text-foreground"
                     }`}
@@ -342,6 +441,19 @@ export function MarginWidget() {
                 )
               })}
             </div>
+            {store.plan === "pomo" ? (
+              <div className="space-y-2.5">
+                {POMO_FIELDS.map((field) => (
+                  <PomoField
+                    key={field.key}
+                    label={field.label}
+                    suffix={field.suffix}
+                    value={store.pomodoro[field.key]}
+                    onCommit={(value) => setPomo(field.key, value)}
+                  />
+                ))}
+              </div>
+            ) : null}
             <Button type="button" className="h-10 w-full" onClick={begin}>
               Begin sitting
             </Button>
@@ -383,17 +495,15 @@ export function MarginWidget() {
               <div>
                 <p className="flex items-center gap-2 text-[13px] text-muted-foreground">
                   <span className="breathe inline-block size-1.5 rounded-full bg-foreground" aria-hidden />
-                  {blockDone ? "Block finished" : "Studying"}
+                  {phaseLabel}
                 </p>
                 <p className="mt-1 text-[2.75rem] leading-none font-medium tabular-nums tracking-[-0.045em]">
-                  {formatElapsed(elapsed)}
+                  {formatElapsed(run ? remaining : elapsed)}
                 </p>
               </div>
-              <p className="pb-1 text-sm text-muted-foreground">
-                {active.targetMinutes ? `${active.targetMinutes} min` : "Open"}
-              </p>
+              <p className="pb-1 text-sm text-muted-foreground">{phaseAside}</p>
             </div>
-            {targetMs ? (
+            {targetMs || run ? (
               <div className="mb-6 h-px w-full bg-foreground/15" aria-hidden>
                 <div className="h-px bg-foreground" style={{ width: `${progress}%` }} />
               </div>
@@ -439,14 +549,26 @@ export function MarginWidget() {
                   </span>
                 )}
               </p>
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-9 px-2 font-normal hover:bg-transparent hover:text-foreground"
-                onClick={endSitting}
-              >
-                End sitting
-              </Button>
+              <div className="flex items-center gap-1">
+                {run ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="h-9 px-2 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
+                    onClick={skipPhase}
+                  >
+                    Skip
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-9 px-2 font-normal hover:bg-transparent hover:text-foreground"
+                  onClick={endSitting}
+                >
+                  End sitting
+                </Button>
+              </div>
             </div>
           </div>
         ) : null}
@@ -501,6 +623,40 @@ export function MarginWidget() {
         </div>
       </section>
     </main>
+  )
+}
+
+function PomoField({
+  label,
+  suffix,
+  value,
+  onCommit,
+}: {
+  label: string
+  suffix: string
+  value: number
+  onCommit: (value: number) => void
+}) {
+  const [text, setText] = useState(String(value))
+  useEffect(() => setText(String(value)), [value])
+  return (
+    <label className="flex items-baseline justify-between gap-3 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="flex items-baseline gap-1.5">
+        <input
+          value={text}
+          inputMode="numeric"
+          aria-label={label}
+          onChange={(event) => setText(event.target.value.replace(/\D/g, "").slice(0, 3))}
+          onBlur={() => {
+            const parsed = Number.parseInt(text, 10)
+            onCommit(Number.isFinite(parsed) ? parsed : value)
+          }}
+          className="w-8 border-b border-transparent bg-transparent text-right tabular-nums outline-none focus:border-foreground"
+        />
+        <span className="w-6 text-xs text-muted-foreground">{suffix}</span>
+      </span>
+    </label>
   )
 }
 

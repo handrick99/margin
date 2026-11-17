@@ -1,4 +1,4 @@
-import { sanitizeStore, type Store, type Theme } from "@/lib/sitting"
+import { DEFAULT_POMODORO, sanitizeStore, type Store, type Theme } from "@/lib/sitting"
 
 export const STORE_KEY = "margin.v1"
 export const THEME_KEY = "margin.theme"
@@ -7,10 +7,12 @@ export function loadStore(): { store: Store; persistent: boolean } {
   try {
     const theme: Theme = localStorage.getItem(THEME_KEY) === "paper" ? "paper" : "ink"
     const raw = localStorage.getItem(STORE_KEY)
-    if (!raw) return { store: { theme, active: null, archive: [] }, persistent: true }
+    if (!raw) {
+      return { store: { theme, plan: "25", pomodoro: DEFAULT_POMODORO, active: null, archive: [] }, persistent: true }
+    }
     return { store: sanitizeStore(JSON.parse(raw) as unknown, theme), persistent: true }
   } catch {
-    return { store: { theme: "ink", active: null, archive: [] }, persistent: false }
+    return { store: { theme: "ink", plan: "25", pomodoro: DEFAULT_POMODORO, active: null, archive: [] }, persistent: false }
   }
 }
 

@@ -11,7 +11,7 @@
     "desktop": "concurrently -k -n web,app \"npm run dev\" \"wait-on http://127.0.0.1:3847 && MARGIN_DEV_URL=http://127.0.0.1:3847/ electron .\"",
     "build": "next build --turbopack",
     "app": "npm run build && electron .",
-    "dist:mac": "npm run build && electron-builder --mac zip --arm64 --x64",
+    "dist:mac": "npm run build && electron-builder --mac zip --universal",
     "lint": "eslint"
   },
   "build": {
@@ -32,7 +32,12 @@
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "build/icon.png",
-      "identity": "-"
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "target": [
+        "zip"
+      ]
     },
     "artifactName": "Margin-${version}-mac-${arch}.${ext}"
   },

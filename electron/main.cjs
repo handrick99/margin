@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, protocol, screen } = require("electron")
+const { app, BrowserWindow, ipcMain, protocol } = require("electron")
 const fs = require("fs")
 const path = require("path")
 
@@ -59,13 +59,13 @@ function readState() {
         height: saved.height,
         x: Number.isFinite(saved.x) ? saved.x : undefined,
         y: Number.isFinite(saved.y) ? saved.y : undefined,
-        fullscreen: saved.fullscreen !== false,
+        fullscreen: saved.fullscreen === true,
       }
     }
   } catch {
     // First launch has no saved window.
   }
-  return { width: 420, height: 520, x: undefined, y: undefined, fullscreen: true }
+  return { width: 420, height: 560, x: undefined, y: undefined, fullscreen: false }
 }
 
 let win = null
@@ -95,28 +95,37 @@ function keepInDock() {
   setTimeout(show, 0)
 }
 
-function setFilled(next) {
-  if (!win || next === filled) return
-  if (next) windowed = win.getBounds()
-  filled = next
-  if (next) {
-    const area = screen.getPrimaryDisplay().bounds
-    win.setAlwaysOnTop(true, "screen-saver")
-    win.setPosition(area.x, area.y)
-    win.setSize(area.width, area.height)
-    if (process.platform === "darwin") win.setSimpleFullScreen(true)
-  } else {
-    if (process.platform === "darwin") win.setSimpleFullScreen(false)
-    win.setMovable(true)
-    win.setAlwaysOnTop(true, "floating")
-    if (process.platform === "darwin") {
-      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-    }
-    if (windowed) win.setBounds(windowed)
+function notifyFullscreen() {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
+  win.webContents.send("fullscreen-changed", filled)
+}
+
+function applyWindowed() {
+  if (!win || win.isDestroyed()) return
+  win.setMovable(true)
+  win.setAlwaysOnTop(true, "floating")
+  if (process.platform === "darwin") {
+    win.setSimpleFullScreen(false)
+    win.setVisibleOnAllWorkspaces(false)
   }
-  keepInDock()
-  saveState()
-  if (!win.webContents.isDestroyed()) win.webContents.send("fullscreen-changed", filled)
+}
+
+function setFilled(next) {
+  if (!win || win.isDestroyed()) return
+  if (next) {
+    if (filled || win.isFullScreen()) return
+    windowed = win.getBounds()
+    win.setAlwaysOnTop(false)
+    if (process.platform === "darwin") {
+      win.setSimpleFullScreen(false)
+      win.setVisibleOnAllWorkspaces(false)
+    }
+    win.setFullScreen(true)
+    return
+  }
+  if (!filled && !win.isFullScreen()) return
+  win.setFullScreen(false)
+  if (process.platform === "darwin") win.setSimpleFullScreen(false)
 }
 
 function createWindow() {
@@ -147,26 +156,42 @@ function createWindow() {
   })
 
   win.removeMenu()
-  if (process.platform === "darwin") {
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-    keepInDock()
-  }
+  applyWindowed()
+  keepInDock()
   win.loadURL(`${devUrl || "app://margin/"}?desktop=1`)
+  win.on("enter-full-screen", () => {
+    filled = true
+    saveState()
+    notifyFullscreen()
+    keepInDock()
+  })
+  win.on("leave-full-screen", () => {
+    filled = false
+    applyWindowed()
+    if (windowed) win.setBounds(windowed)
+    saveState()
+    notifyFullscreen()
+    keepInDock()
+  })
+  win.webContents.on("before-input-event", (_event, input) => {
+    if (input.type === "keyDown" && input.key === "Escape" && (filled || win?.isFullScreen())) {
+      setFilled(false)
+    }
+  })
   win.once("ready-to-show", () => {
     if (!win) return
     win.show()
     if (state.fullscreen) setFilled(true)
-    else win.setMovable(true)
     keepInDock()
     settled = true
   })
   win.on("move", () => {
-    if (!settled || !win || filled) return
+    if (!settled || !win || filled || win.isFullScreen()) return
     windowed = win.getBounds()
     saveState()
   })
   win.on("resize", () => {
-    if (!settled || !win || filled) return
+    if (!settled || !win || filled || win.isFullScreen()) return
     windowed = win.getBounds()
     saveState()
   })
