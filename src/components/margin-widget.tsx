@@ -97,6 +97,7 @@ export function MarginWidget() {
   const endRef = useRef<() => void>(() => {})
   const resumeRef = useRef<() => void>(() => {})
   const copyRef = useRef<() => void>(() => {})
+  const cyclePlanRef = useRef<(backward: boolean) => void>(() => {})
   const audioRef = useRef<AudioContext | null>(null)
 
   storeRef.current = store
@@ -223,6 +224,17 @@ export function MarginWidget() {
         }
         return
       }
+      if (event.key === "Tab" && !event.repeat && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const target = event.target
+        const typing =
+          target instanceof HTMLElement &&
+          (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+        if (typing || phaseRef.current !== "idle") return
+        event.preventDefault()
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+        cyclePlanRef.current(event.shiftKey)
+        return
+      }
       if (event.code !== "Space" || event.repeat || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
       const screen = phaseRef.current
       if (screen !== "idle" && screen !== "live" && screen !== "sealed") return
@@ -292,6 +304,16 @@ export function MarginWidget() {
   function choosePlan(plan: SittingPlan) {
     if (!store || store.plan === plan) return
     persist({ ...store, plan })
+  }
+
+  cyclePlanRef.current = (backward) => {
+    const current = storeRef.current
+    if (!current) return
+    const index = PLANS.findIndex((option) => option.id === current.plan)
+    const step = backward ? PLANS.length - 1 : 1
+    const next = PLANS[(Math.max(0, index) + step) % PLANS.length]
+    if (!next || next.id === current.plan) return
+    persist({ ...current, plan: next.id })
   }
 
   function setPomo(key: keyof PomodoroSettings, raw: number) {
@@ -486,8 +508,9 @@ export function MarginWidget() {
                     key={option.id}
                     type="button"
                     aria-pressed={selected}
+                    tabIndex={-1}
                     onClick={() => choosePlan(option.id)}
-                    className={`rounded-sm py-1 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 ${
+                    className={`rounded-sm py-1 text-sm outline-none transition-colors ${
                       selected ? "text-foreground" : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
