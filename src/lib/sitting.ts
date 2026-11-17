@@ -20,7 +20,7 @@ export type PomodoroRun = {
   completedFocuses: number
 }
 
-export type SittingPlan = "25" | "50" | "open" | "pomo"
+export type SittingPlan = "25" | "open" | "pomo"
 
 export type Sitting = {
   id: string
@@ -191,14 +191,7 @@ export function sittingLength(sitting: Sitting, now: number): number {
 }
 
 export function transcript(sitting: Sitting): string {
-  const length = formatLength(sittingLength(sitting, sitting.endedAt ?? sitting.startedAt))
-  const when = formatWhen(sitting.startedAt)
-  const body = sitting.thoughts.length
-    ? sitting.thoughts
-        .map((thought) => `${formatElapsed(thought.offsetMs)}\n${thought.text}`)
-        .join("\n\n")
-    : "Nothing wandered in."
-  return `Margin · ${when} · ${length}\n\n${body}`
+  return sitting.thoughts.map((thought) => thought.text.trim()).filter(Boolean).join("\n")
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -219,7 +212,7 @@ function sanitizePomodoro(value: unknown): PomodoroRun | null {
   }
 }
 
-const PLANS: SittingPlan[] = ["25", "50", "open", "pomo"]
+const PLANS: SittingPlan[] = ["25", "open", "pomo"]
 
 function sanitizeThought(value: unknown): Thought | null {
   if (!isRecord(value)) return null

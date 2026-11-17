@@ -27,7 +27,6 @@ import { loadStore, saveStore } from "@/lib/storage"
 
 const PLANS: { id: SittingPlan; label: string }[] = [
   { id: "25", label: "25 min" },
-  { id: "50", label: "50 min" },
   { id: "open", label: "Open" },
   { id: "pomo", label: "Pomo" },
 ]
@@ -94,10 +93,15 @@ export function MarginWidget() {
   const storeRef = useRef<Store | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const revealRef = useRef<HTMLButtonElement>(null)
+  const beginRef = useRef<() => void>(() => {})
+  const endRef = useRef<() => void>(() => {})
+  const resumeRef = useRef<() => void>(() => {})
   const audioRef = useRef<AudioContext | null>(null)
 
   storeRef.current = store
   const phase = phaseOf(store, viewing)
+  const phaseRef = useRef(phase)
+  phaseRef.current = phase
   const openSitting = viewing ?? (store?.active?.revealedAt ? store.active : null)
 
   useLayoutEffect(() => {
@@ -195,6 +199,28 @@ export function MarginWidget() {
   }, [draft, store])
 
   useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || event.repeat || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
+      const screen = phaseRef.current
+      if (screen !== "idle" && screen !== "live" && screen !== "sealed") return
+      const target = event.target
+      const typing =
+        target instanceof HTMLElement &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      if (typing) {
+        const emptyThought = screen === "live" && target === inputRef.current && draftRef.current === ""
+        if (!emptyThought) return
+      }
+      event.preventDefault()
+      if (screen === "idle") beginRef.current()
+      else if (screen === "live") endRef.current()
+      else resumeRef.current()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
+
+  useEffect(() => {
     if (!justHeld) return
     const id = window.setTimeout(() => setJustHeld(false), 900)
     return () => window.clearTimeout(id)
@@ -229,12 +255,16 @@ export function MarginWidget() {
     setConfirmClear(false)
     draftRef.current = ""
     setDraft("")
-    const minutes = store.plan === "50" ? 50 : store.plan === "25" ? 25 : null
+    const minutes = store.plan === "25" ? 25 : null
     persist({
       ...store,
       active: createSitting(minutes, Date.now(), store.plan === "pomo" ? store.pomodoro : undefined),
     })
   }
+
+  beginRef.current = begin
+  endRef.current = endSitting
+  resumeRef.current = onResume
 
   function choosePlan(plan: SittingPlan) {
     if (!store || store.plan === plan) return
